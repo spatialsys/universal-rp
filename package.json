@@ -1,0 +1,22 @@
+{
+  "name": "com.unity.render-pipelines.universal",
+  "description": "[Spatial Fork] The Universal Render Pipeline (URP) is a prebuilt Scriptable Render Pipeline, made by Unity. URP provides artist-friendly workflows that let you quickly and easily create optimized graphics across a range of platforms, from mobile to high-end consoles and PCs.",
+  "version": "12.1.10",
+  "unity": "2021.3",
+  "displayName": "Universal RP (Spatial Fork)",
+  "author": "Spatial Systems (https://www.spatial.io)",
+  "dependencies": {
+    "com.unity.mathematics": "1.2.1",
+    "com.unity.burst": "1.8.2",
+    "com.unity.render-pipelines.core": "12.1.10",
+    "com.unity.shadergraph": "12.1.10"
+  },
+  "keywords": [
+    "graphics",
+    "performance",
+    "rendering",
+    "mobile",
+    "render",
+    "pipeline"
+  ]
+}
