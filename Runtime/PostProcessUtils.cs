@@ -55,7 +55,13 @@ namespace UnityEngine.Rendering.Universal
             var texture = settings.texture.value;
 
             if (settings.type.value != FilmGrainLookup.Custom)
-                texture = data.textures.filmGrainTex[(int)settings.type.value];
+            {
+                material.EnableKeyword("_GRAIN_DYNAMIC");
+            }
+            else
+            {
+                material.DisableKeyword("_GRAIN_DYNAMIC");
+            }
 
 #if LWRP_DEBUG_STATIC_POSTFX
             float offsetX = 0f;
@@ -66,7 +72,7 @@ namespace UnityEngine.Rendering.Universal
 #endif
 
             var tilingParams = texture == null
-                ? Vector4.zero
+                ? new Vector4(0f, 0f, offsetX, offsetY)
                 : new Vector4(cameraPixelWidth / (float)texture.width, cameraPixelHeight / (float)texture.height, offsetX, offsetY);
 
             material.SetTexture(ShaderConstants._Grain_Texture, texture);

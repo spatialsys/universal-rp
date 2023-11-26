@@ -165,6 +165,27 @@ half3 ApplyColorGrading(half3 input, float postExposure, TEXTURE2D_PARAM(lutTex,
     return input;
 }
 
+half SimpleNoise(float2 uv)
+{
+    return frac(sin(dot(uv, float2(129.8978, 782.343))) * 437585.453123);
+}
+
+half3 ApplyGrainDynamic(half3 input, float2 uv, float intensity, float response, float2 offset)
+{
+    // Make the grains bigger by quantization.
+    uv = round(uv * _ScreenParams.xy * 0.5) / _ScreenParams.xy;
+    half grain = 0.5 + (SimpleNoise(uv + offset) - 0.5) * 0.0625;
+
+    // Remap [-1;1]
+    grain = (grain - 0.5) * 2.0;
+
+    // Noisiness response curve based on scene luminance
+    float lum = 1.0 - sqrt(Luminance(input));
+    lum = lerp(1.0, lum, response);
+
+    return input + input * grain * intensity * lum;
+}
+
 half3 ApplyGrain(half3 input, float2 uv, TEXTURE2D_PARAM(GrainTexture, GrainSampler), float intensity, float response, float2 scale, float2 offset)
 {
     // Grain in range [0;1] with neutral at 0.5
