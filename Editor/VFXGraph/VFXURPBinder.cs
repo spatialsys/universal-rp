@@ -18,6 +18,11 @@ namespace UnityEditor.VFX.URP
         public override string SRPAssetTypeStr { get { return "UniversalRenderPipelineAsset"; } }
         public override Type SRPOutputDataType { get { return null; } } // null by now but use VFXURPSubOutput when there is a need to store URP specific data
 
+        public override bool IsShaderVFXCompatible(Shader shader)
+        {
+            return shader.TryGetMetadataOfType<UniversalMetadata>(out var metadata) && metadata.isVFXCompatible;
+        }
+
         public override void SetupMaterial(Material material, bool hasMotionVector = false, bool hasShadowCasting = false, ShaderGraphVfxAsset shaderGraph = null)
         {
             ShaderUtils.UpdateMaterial(material, ShaderUtils.MaterialUpdateType.ModifiedShader, shaderGraph);
@@ -109,8 +114,11 @@ namespace UnityEditor.VFX.URP
             {
                 switch (metaData.shaderID)
                 {
-                    case ShaderUtils.ShaderID.SG_Unlit: return "Unlit";
-                    case ShaderUtils.ShaderID.SG_Lit: return "Lit";
+                    case ShaderUtils.ShaderID.SG_Unlit:
+                    case ShaderUtils.ShaderID.SG_SpriteUnlit: return "Unlit";
+                    case ShaderUtils.ShaderID.SG_Lit:
+                    case ShaderUtils.ShaderID.SG_SpriteLit:
+                    case ShaderUtils.ShaderID.SG_SpriteCustomLit: return "Lit";
                 }
             }
             return string.Empty;
@@ -170,30 +178,8 @@ namespace UnityEditor.VFX.URP
         static StructDescriptor AppendVFXInterpolator(StructDescriptor interpolator, VFXContext context, VFXContextCompiledData contextData)
         {
             var fields = interpolator.fields.ToList();
-
-            var expressionToName = context.GetData().GetAttributes().ToDictionary(o => new VFXAttributeExpression(o.attrib) as VFXExpression, o => (new VFXAttributeExpression(o.attrib)).GetCodeString(null));
-            expressionToName = expressionToName.Union(contextData.uniformMapper.expressionToCode).ToDictionary(s => s.Key, s => s.Value);
-
-            var mainParameters = contextData.gpuMapper.CollectExpression(-1).ToArray();
-
-            // Warning/TODO: FragmentParameters are created from the ShaderGraphVfxAsset.
-            // We may ultimately need to move this handling of VFX Interpolators + SurfaceDescriptionFunction function signature directly into the SG Generator (since it knows about the exposed properties).
-            foreach (string fragmentParameter in context.fragmentParameters)
-            {
-                var filteredNamedExpression = mainParameters.FirstOrDefault(o => fragmentParameter == o.name &&
-                    !(expressionToName.ContainsKey(o.exp) && expressionToName[o.exp] == o.name)); // if parameter already in the global scope, there's nothing to do
-
-                if (filteredNamedExpression.exp != null)
-                {
-                    var type = VFXExpression.TypeToType(filteredNamedExpression.exp.valueType);
-
-                    if (!VFXSubTarget.kVFXShaderValueTypeMap.TryGetValue(type, out var shaderValueType))
-                        continue;
-
-                    // TODO: NoInterpolation only for non-strips.
-                    fields.Add(new FieldDescriptor(UniversalStructs.Varyings.name, filteredNamedExpression.name, "", shaderValueType, subscriptOptions: StructFieldOptions.Static, interpolation: "nointerpolation"));
-                }
-            }
+			
+			fields.AddRange(VFXSubTarget.GetVFXInterpolators(UniversalStructs.Varyings.name, context, contextData));
 
             fields.Add(StructFields.Varyings.worldToElement0);
             fields.Add(StructFields.Varyings.worldToElement1);
@@ -209,35 +195,31 @@ namespace UnityEditor.VFX.URP
 
         static IEnumerable<FieldDescriptor> GenerateSurfaceDescriptionInput(VFXContext context, VFXContextCompiledData contextData)
         {
-            // VFX Material Properties
-            var expressionToName = context.GetData().GetAttributes().ToDictionary(o => new VFXAttributeExpression(o.attrib) as VFXExpression, o => (new VFXAttributeExpression(o.attrib)).GetCodeString(null));
-            expressionToName = expressionToName.Union(contextData.uniformMapper.expressionToCode).ToDictionary(s => s.Key, s => s.Value);
-
-            var mainParameters = contextData.gpuMapper.CollectExpression(-1).ToArray();
-
             var alreadyAddedField = new HashSet<string>();
-            foreach (string fragmentParameter in context.fragmentParameters)
-            {
-                var filteredNamedExpression = mainParameters.FirstOrDefault(o => fragmentParameter == o.name);
 
-                if (filteredNamedExpression.exp != null)
-                {
-                    var type = VFXExpression.TypeToType(filteredNamedExpression.exp.valueType);
-
-                    if (!VFXSubTarget.kVFXShaderValueTypeMap.TryGetValue(type, out var shaderValueType))
-                        continue;
-
-                    alreadyAddedField.Add(filteredNamedExpression.name);
-                    yield return new FieldDescriptor(StructFields.SurfaceDescriptionInputs.name, filteredNamedExpression.name, "", shaderValueType);
-                }
-            }
-
-            //Append everything from common SurfaceDescriptionInputs
+            //Everything from common SurfaceDescriptionInputs
             foreach (var field in Structs.SurfaceDescriptionInputs.fields)
             {
-                if (!alreadyAddedField.Contains(field.name))
-                    yield return field;
+                alreadyAddedField.Add(field.name);
+                yield return field;
             }
+			
+			// VFX Material Properties
+			if (contextData.SGInputs != null)
+            {
+                foreach (var input in contextData.SGInputs.fragInputs)
+                {
+                    var (name, exp) = (input.Key,input.Value);
+
+                    if (!VFXSubTarget.kVFXShaderValueTypeMap.TryGetValue(VFXExpression.TypeToType(exp.valueType), out var shaderValueType))
+                        throw new Exception($"Unsupported property type for {name}: {exp.valueType}");
+
+					if (alreadyAddedField.Contains(name))
+						throw new Exception($"Name conflict detected in SurfaceDescriptionInputs: {name}");
+					
+                    yield return new FieldDescriptor(StructFields.SurfaceDescriptionInputs.name, name, "", shaderValueType);
+                }
+            }			
         }
 
         public override ShaderGraphBinder GetShaderGraphDescriptor(VFXContext context, VFXContextCompiledData data)
@@ -260,7 +242,7 @@ namespace UnityEditor.VFX.URP
                 },
 
                 fieldDependencies = ElementSpaceDependencies,
-                pragmasReplacement = new (PragmaDescriptor, PragmaDescriptor)[]
+                pragmasReplacement = new []
                 {
                     ( Pragma.Vertex("vert"), Pragma.Vertex("VertVFX") ),
 
@@ -269,13 +251,6 @@ namespace UnityEditor.VFX.URP
                     ( Pragma.Target(ShaderModel.Target30), Pragma.Target(ShaderModel.Target45) ),
                     ( Pragma.Target(ShaderModel.Target35), Pragma.Target(ShaderModel.Target45) ),
                     ( Pragma.Target(ShaderModel.Target40), Pragma.Target(ShaderModel.Target45) ),
-
-                    //Irrelevant general multicompile instancing (VFX will append them when needed)
-                    ( Pragma.MultiCompileInstancing, ShaderGraphBinder.kPragmaDescriptorNone),
-                    ( Pragma.DOTSInstancing, ShaderGraphBinder.kPragmaDescriptorNone),
-                    ( Pragma.InstancingOptions(InstancingOptions.RenderingLayer), ShaderGraphBinder.kPragmaDescriptorNone ),
-                    ( Pragma.InstancingOptions(InstancingOptions.NoLightProbe), ShaderGraphBinder.kPragmaDescriptorNone ),
-                    ( Pragma.InstancingOptions(InstancingOptions.NoLodFade), ShaderGraphBinder.kPragmaDescriptorNone ),
                 },
                 useFragInputs = false
             };

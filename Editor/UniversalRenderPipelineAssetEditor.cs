@@ -5,6 +5,9 @@ using Styles = UnityEditor.Rendering.Universal.UniversalRenderPipelineAssetUI.St
 
 namespace UnityEditor.Rendering.Universal
 {
+    /// <summary>
+    /// Editor script for a <c>UniversalRenderPipelineAsset</c> class.
+    /// </summary>
     [CustomEditor(typeof(UniversalRenderPipelineAsset)), CanEditMultipleObjects]
     public class UniversalRenderPipelineAssetEditor : Editor
     {
@@ -16,6 +19,7 @@ namespace UnityEditor.Rendering.Universal
 
         private SerializedUniversalRenderPipelineAsset m_SerializedURPAsset;
 
+        /// <inheritdoc/>
         public override void OnInspectorGUI()
         {
             m_SerializedURPAsset.Update();

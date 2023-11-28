@@ -4,6 +4,9 @@ using UnityEngine.Rendering.Universal;
 
 namespace UnityEditor.Rendering.Universal
 {
+    /// <summary>
+    /// Editor script for a <c>UniversalRendererData</c> class.
+    /// </summary>
     [CustomEditor(typeof(UniversalRendererData), true)]
     public class UniversalRendererDataEditor : ScriptableRendererDataEditor
     {
@@ -20,7 +23,7 @@ namespace UnityEditor.Rendering.Universal
             public static readonly GUIContent RenderingModeLabel = EditorGUIUtility.TrTextContent("Rendering Path", "Select a rendering path.");
             public static readonly GUIContent DepthPrimingModeLabel = EditorGUIUtility.TrTextContent("Depth Priming Mode", "With depth priming enabled, Unity uses the depth buffer generated in the depth prepass to determine if a fragment should be rendered or skipped during the Base Camera opaque pass. Disabled: Unity does not perform depth priming. Auto: If there is a Render Pass that requires a depth prepass, Unity performs the depth prepass and depth priming. Forced: Unity performs the depth prepass and depth priming.");
             public static readonly GUIContent DepthPrimingModeInfo = EditorGUIUtility.TrTextContent("On Android, iOS, and Apple TV, Unity performs depth priming only in the Forced mode. On tiled GPUs, which are common to those platforms, depth priming might reduce performance when combined with MSAA.");
-            public static readonly GUIContent CopyDepthModeLabel = EditorGUIUtility.TrTextContent("Depth Texture Mode", "Controls after which pass URP copies the scene depth. It has a significant impact on mobile devices bandwidth usage. It allows to force a depth prepass to generate it.");
+            public static readonly GUIContent CopyDepthModeLabel = EditorGUIUtility.TrTextContent("Depth Texture Mode", "Controls after which pass URP copies the scene depth. It has a significant impact on mobile devices bandwidth usage. It also allows to force a depth prepass to generate it.");
             public static readonly GUIContent RenderPassLabel = EditorGUIUtility.TrTextContent("Native RenderPass", "Enables URP to use RenderPass API. Has no effect on OpenGLES2");
 
             public static readonly GUIContent RenderPassSectionLabel = EditorGUIUtility.TrTextContent("RenderPass", "This section contains properties related to render passes.");
@@ -30,11 +33,9 @@ namespace UnityEditor.Rendering.Universal
             public static readonly GUIContent OverridesSectionLabel = EditorGUIUtility.TrTextContent("Overrides", "This section contains Render Pipeline properties that this Renderer overrides.");
 
             public static readonly GUIContent accurateGbufferNormalsLabel = EditorGUIUtility.TrTextContent("Accurate G-buffer normals", "Normals in G-buffer use octahedron encoding/decoding. This improves visual quality but might reduce performance.");
-            //public static readonly GUIContent tiledDeferredShadingLabel = EditorGUIUtility.TrTextContent("Tiled Deferred Shading (Experimental)", "Allows Tiled Deferred Shading on appropriate lights");
             public static readonly GUIContent defaultStencilStateLabel = EditorGUIUtility.TrTextContent("Default Stencil State", "Configure the stencil state for the opaque and transparent render passes.");
             public static readonly GUIContent shadowTransparentReceiveLabel = EditorGUIUtility.TrTextContent("Transparent Receive Shadows", "When disabled, none of the transparent objects will receive shadows.");
             public static readonly GUIContent invalidStencilOverride = EditorGUIUtility.TrTextContent("Error: When using the deferred rendering path, the Renderer requires the control over the 4 highest bits of the stencil buffer to store Material types. The current combination of the stencil override options prevents the Renderer from controlling the required bits. Try changing one of the options to Replace.");
-            public static readonly GUIContent clusteredRenderingLabel = EditorGUIUtility.TrTextContent("Clustered (experimental)", "(Experimental) Enables clustered rendering, allowing for more lights per object and more accurate light cullling.");
             public static readonly GUIContent intermediateTextureMode = EditorGUIUtility.TrTextContent("Intermediate Texture", "Controls when URP renders via an intermediate texture.");
         }
 
@@ -44,21 +45,12 @@ namespace UnityEditor.Rendering.Universal
         SerializedProperty m_DepthPrimingMode;
         SerializedProperty m_CopyDepthMode;
         SerializedProperty m_AccurateGbufferNormals;
-        //SerializedProperty m_TiledDeferredShading;
-        SerializedProperty m_ClusteredRendering;
-        SerializedProperty m_TileSize;
         SerializedProperty m_UseNativeRenderPass;
         SerializedProperty m_DefaultStencilState;
         SerializedProperty m_PostProcessData;
         SerializedProperty m_Shaders;
         SerializedProperty m_ShadowTransparentReceiveProp;
         SerializedProperty m_IntermediateTextureMode;
-
-#if URP_ENABLE_CLUSTERED_UI
-        static bool s_EnableClusteredUI => true;
-#else
-        static bool s_EnableClusteredUI => false;
-#endif
 
         private void OnEnable()
         {
@@ -68,10 +60,6 @@ namespace UnityEditor.Rendering.Universal
             m_DepthPrimingMode = serializedObject.FindProperty("m_DepthPrimingMode");
             m_CopyDepthMode = serializedObject.FindProperty("m_CopyDepthMode");
             m_AccurateGbufferNormals = serializedObject.FindProperty("m_AccurateGbufferNormals");
-            // Not exposed yet.
-            //m_TiledDeferredShading = serializedObject.FindProperty("m_TiledDeferredShading");
-            m_ClusteredRendering = serializedObject.FindProperty("m_ClusteredRendering");
-            m_TileSize = serializedObject.FindProperty("m_TileSize");
             m_UseNativeRenderPass = serializedObject.FindProperty("m_UseNativeRenderPass");
             m_DefaultStencilState = serializedObject.FindProperty("m_DefaultStencilState");
             m_PostProcessData = serializedObject.FindProperty("postProcessData");
@@ -80,6 +68,7 @@ namespace UnityEditor.Rendering.Universal
             m_IntermediateTextureMode = serializedObject.FindProperty("m_IntermediateTextureMode");
         }
 
+        /// <inheritdoc/>
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
@@ -100,21 +89,12 @@ namespace UnityEditor.Rendering.Universal
             {
                 EditorGUI.indentLevel++;
                 EditorGUILayout.PropertyField(m_AccurateGbufferNormals, Styles.accurateGbufferNormalsLabel, true);
-                //EditorGUILayout.PropertyField(m_TiledDeferredShading, Styles.tiledDeferredShadingLabel, true);
                 EditorGUI.indentLevel--;
             }
 
-            if (m_RenderingMode.intValue == (int)RenderingMode.Forward)
+            if (m_RenderingMode.intValue == (int)RenderingMode.Forward || m_RenderingMode.intValue == (int)RenderingMode.ForwardPlus)
             {
                 EditorGUI.indentLevel++;
-
-                if (s_EnableClusteredUI)
-                {
-                    EditorGUILayout.PropertyField(m_ClusteredRendering, Styles.clusteredRenderingLabel);
-                    EditorGUI.BeginDisabledGroup(!m_ClusteredRendering.boolValue);
-                    EditorGUILayout.PropertyField(m_TileSize);
-                    EditorGUI.EndDisabledGroup();
-                }
 
                 EditorGUILayout.PropertyField(m_DepthPrimingMode, Styles.DepthPrimingModeLabel);
                 if (m_DepthPrimingMode.intValue != (int)DepthPrimingMode.Disabled)
@@ -126,6 +106,7 @@ namespace UnityEditor.Rendering.Universal
             }
 
             EditorGUILayout.PropertyField(m_CopyDepthMode, Styles.CopyDepthModeLabel);
+
 
             EditorGUI.indentLevel--;
             EditorGUILayout.Space();

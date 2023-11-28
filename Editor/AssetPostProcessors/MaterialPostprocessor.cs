@@ -1,11 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using UnityEditor.Rendering.Analytics;
+using UnityEditor.Rendering.Universal.Analytics;
 using UnityEditor.Rendering.Universal.ShaderGUI;
 using UnityEditor.ShaderGraph;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
 using static Unity.Rendering.Universal.ShaderUtils;
+using BlendMode = UnityEngine.Rendering.BlendMode;
 
 namespace UnityEditor.Rendering.Universal
 {
@@ -27,33 +31,8 @@ namespace UnityEditor.Rendering.Universal
 
         static void ReimportAllMaterials()
         {
-            string[] guids = AssetDatabase.FindAssets("t:material", null);
-            // There can be several materials subAssets per guid ( ie : FBX files ), remove duplicate guids.
-            var distinctGuids = guids.Distinct();
-
-            int materialIdx = 0;
-            int totalMaterials = distinctGuids.Count();
-
-            try
-            {
-                AssetDatabase.StartAssetEditing();
-
-                foreach (var asset in distinctGuids)
-                {
-                    materialIdx++;
-                    var path = AssetDatabase.GUIDToAssetPath(asset);
-                    EditorUtility.DisplayProgressBar("Material Upgrader re-import", string.Format("({0} of {1}) {2}", materialIdx, totalMaterials, path), (float)materialIdx / (float)totalMaterials);
-                    AssetDatabase.ImportAsset(path);
-                }
-            }
-            finally
-            {
-                // Ensure the AssetDatabase knows we're finished editing
-                AssetDatabase.StopAssetEditing();
-            }
-
-            EditorUtility.ClearProgressBar();
-
+            AssetReimportUtils.ReimportAll<Material>(out var duration, out var numberOfAssetsReimported);
+            AssetReimporterAnalytic.Send<Material>(duration, numberOfAssetsReimported);
             MaterialPostprocessor.s_NeedsSavingAssets = true;
         }
 
@@ -62,6 +41,9 @@ namespace UnityEditor.Rendering.Universal
         {
             EditorApplication.update += () =>
             {
+                if (GraphicsSettings.currentRenderPipeline is not UniversalRenderPipelineAsset universalRenderPipeline)
+                    return;
+
                 if (Time.renderedFrameCount > 0)
                 {
                     bool fileExist = true;
@@ -103,7 +85,7 @@ namespace UnityEditor.Rendering.Universal
         internal static List<string> s_ImportedAssetThatNeedSaving = new List<string>();
         internal static bool s_NeedsSavingAssets = false;
 
-        internal static readonly Action<Material, ShaderID>[] k_Upgraders = { UpgradeV1, UpgradeV2, UpgradeV3, UpgradeV4, UpgradeV5 };
+        internal static readonly Action<Material, ShaderID>[] k_Upgraders = { UpgradeV1, UpgradeV2, UpgradeV3, UpgradeV4, UpgradeV5, UpgradeV6, UpgradeV7 };
 
         static internal void SaveAssetsToDisk()
         {
@@ -196,7 +178,7 @@ namespace UnityEditor.Rendering.Universal
                     AssetDatabase.AddObjectToAsset(assetVersion, asset);
                 }
 
-                while (assetVersion.version < k_Upgraders.Length)
+                while (assetVersion.version >= 0 && assetVersion.version < k_Upgraders.Length)
                 {
                     k_Upgraders[assetVersion.version](material, shaderID);
                     debug += $" upgrading:v{assetVersion.version} to v{assetVersion.version + 1}";
@@ -318,6 +300,78 @@ namespace UnityEditor.Rendering.Universal
                 {
                     material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
                 }
+            }
+        }
+
+        // Separate Preserve Specular Lighting from Premultiplied blend mode.
+        // Update materials params for backwards compatibility. (Keep the same end result).
+        // - Previous (incorrect) premultiplied blend mode --> Alpha blend mode + Preserve Specular Lighting
+        // - Otherwise keep the blend mode and disable Preserve Specular Lighting
+        // - Correct premultiply mode is not possible in V5.
+        //
+        // This is run both hand-written and shadergraph materials.
+        //
+        // Hand-written and overridable shadergraphs always have blendModePreserveSpecular property, which
+        // is assumed to be new since we only run this for V5 -> V6 upgrade.
+        //
+        // Fixed shadergraphs do not have this keyword and are filtered out.
+        // The blend mode is baked in the generated shader, so there's no material properties to be upgraded.
+        // The shadergraph upgrade on re-import will handle the fixed shadergraphs.
+        static void UpgradeV6(Material material, ShaderID shaderID)
+        {
+            var surfaceTypePID = Shader.PropertyToID(Property.SurfaceType);
+            bool isTransparent = material.HasProperty(surfaceTypePID) && material.GetFloat(surfaceTypePID) >= 1.0f;
+
+            if (isTransparent)
+            {
+                if (shaderID == ShaderID.Unlit)
+                {
+                    var blendModePID = Shader.PropertyToID(Property.BlendMode);
+                    var blendMode = (BaseShaderGUI.BlendMode)material.GetFloat(blendModePID);
+
+                    // Premultiply used to be "Premultiply (* alpha in shader)" aka Alpha blend
+                    if (blendMode == BaseShaderGUI.BlendMode.Premultiply)
+                        material.SetFloat(blendModePID, (float)BaseShaderGUI.BlendMode.Alpha);
+                }
+                else
+                {
+                    var blendModePreserveSpecularPID = Shader.PropertyToID(Property.BlendModePreserveSpecular);
+                    if (material.HasProperty(blendModePreserveSpecularPID))
+                    {
+                        var blendModePID = Shader.PropertyToID(Property.BlendMode);
+                        var blendMode = (BaseShaderGUI.BlendMode)material.GetFloat(blendModePID);
+                        if (blendMode == BaseShaderGUI.BlendMode.Premultiply)
+                        {
+                            material.SetFloat(blendModePID, (float)BaseShaderGUI.BlendMode.Alpha);
+                            material.SetFloat(blendModePreserveSpecularPID, 1.0f);
+                        }
+                        else
+                        {
+                            material.SetFloat(blendModePreserveSpecularPID, 0.0f);
+                        }
+
+                        BaseShaderGUI.SetMaterialKeywords(material);
+                    }
+                }
+            }
+        }
+
+        // Upgrades alpha-clipped materials to include logic for automatic alpha-to-coverage support
+        static void UpgradeV7(Material material, ShaderID shaderID)
+        {
+            var surfacePropertyID = Shader.PropertyToID(Property.SurfaceType);
+            var alphaClipPropertyID = Shader.PropertyToID(Property.AlphaClip);
+            var alphaToMaskPropertyID = Shader.PropertyToID(Property.AlphaToMask);
+            if (material.HasProperty(surfacePropertyID) &&
+                material.HasProperty(alphaClipPropertyID) &&
+                material.HasProperty(alphaToMaskPropertyID))
+            {
+                bool isOpaque = material.GetFloat(surfacePropertyID) < 1.0f;
+                bool isAlphaClipEnabled = material.GetFloat(alphaClipPropertyID) > 0.0f;
+
+                float alphaToMask = (isOpaque && isAlphaClipEnabled) ? 1.0f : 0.0f;
+
+                material.SetFloat(alphaToMaskPropertyID, alphaToMask);
             }
         }
     }

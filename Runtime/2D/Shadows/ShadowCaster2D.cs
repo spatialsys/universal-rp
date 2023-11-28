@@ -1,6 +1,10 @@
 using System;
 using UnityEngine.Scripting.APIUpdating;
 
+#if UNITY_EDITOR
+using System.Linq;
+#endif
+
 namespace UnityEngine.Rendering.Universal
 {
     /// <summary>
@@ -12,9 +16,19 @@ namespace UnityEngine.Rendering.Universal
     [MovedFrom("UnityEngine.Experimental.Rendering.Universal")]
     public class ShadowCaster2D : ShadowCasterGroup2D, ISerializationCallbackReceiver
     {
+        /// <summary>
+        /// Enum used for different component versions.
+        /// </summary>
         public enum ComponentVersions
         {
+            /// <summary>
+            /// Used for unserialized version.
+            /// </summary>
             Version_Unserialized = 0,
+
+            /// <summary>
+            /// Used for version 1.
+            /// </summary>
             Version_1 = 1
         }
         const ComponentVersions k_CurrentComponentVersion = ComponentVersions.Version_1;
@@ -37,7 +51,14 @@ namespace UnityEngine.Rendering.Universal
         internal Bounds m_LocalBounds;
         internal BoundingSphere m_BoundingSphere;
 
+        /// <summary>
+        /// The mesh to draw with.
+        /// </summary>
         public Mesh mesh => m_Mesh;
+
+        /// <summary>
+        /// The path for the shape.
+        /// </summary>
         public Vector3[] shapePath => m_ShapePath;
         internal int shapePathHash { get { return m_ShapePathHash; } set { m_ShapePathHash = value; } }
 
@@ -164,6 +185,9 @@ namespace UnityEngine.Rendering.Universal
             }
         }
 
+        /// <summary>
+        /// This function is called when the object becomes enabled and active.
+        /// </summary>
         protected void OnEnable()
         {
             if (m_Mesh == null || m_InstanceId != GetInstanceID())
@@ -174,13 +198,29 @@ namespace UnityEngine.Rendering.Universal
             }
 
             m_ShadowCasterGroup = null;
+
+#if UNITY_EDITOR
+            SortingLayer.onLayerAdded += OnSortingLayerAdded;
+            SortingLayer.onLayerRemoved += OnSortingLayerRemoved;
+#endif
         }
 
+        /// <summary>
+        /// This function is called when the behaviour becomes disabled.
+        /// </summary>
         protected void OnDisable()
         {
             ShadowCasterGroup2DManager.RemoveFromShadowCasterGroup(this, m_ShadowCasterGroup);
+
+#if UNITY_EDITOR
+            SortingLayer.onLayerAdded -= OnSortingLayerAdded;
+            SortingLayer.onLayerRemoved -= OnSortingLayerRemoved;
+#endif
         }
 
+        /// <summary>
+        /// Update is called every frame, if the MonoBehaviour is enabled.
+        /// </summary>
         public void Update()
         {
             Renderer renderer;
@@ -221,11 +261,25 @@ namespace UnityEngine.Rendering.Universal
             UpdateBoundingSphere();
         }
 
+#if UNITY_EDITOR
+        private void OnSortingLayerAdded(SortingLayer layer)
+        {
+            m_ApplyToSortingLayers = m_ApplyToSortingLayers.Append(layer.id).ToArray();
+        }
+
+        private void OnSortingLayerRemoved(SortingLayer layer)
+        {
+            m_ApplyToSortingLayers = m_ApplyToSortingLayers.Where(x => x != layer.id && SortingLayer.IsValid(x)).ToArray();
+        }
+#endif
+
+        /// <inheritdoc/>
         public void OnBeforeSerialize()
         {
             m_ComponentVersion = k_CurrentComponentVersion;
         }
 
+        /// <inheritdoc/>
         public void OnAfterDeserialize()
         {
             // Upgrade from no serialized version

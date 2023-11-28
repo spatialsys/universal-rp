@@ -3,11 +3,12 @@ using System.Linq;
 using System.Collections.Generic;
 using UnityEditor.ShaderGraph;
 using UnityEditor.ShaderGraph.Legacy;
-using UnityEditor.UIElements;
+
+using Unity.Rendering.Universal;
 
 namespace UnityEditor.Rendering.Universal.ShaderGraph
 {
-    sealed class UniversalSpriteUnlitSubTarget : SubTarget<UniversalTarget>, ILegacyTarget
+    sealed class UniversalSpriteUnlitSubTarget : UniversalSubTarget, ILegacyTarget
     {
         static readonly GUID kSourceCodeGuid = new GUID("ed7c0aacec26e9646b45c96fb318e5a3"); // UniversalSpriteUnlitSubTarget.cs
 
@@ -16,63 +17,32 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
             displayName = "Sprite Unlit";
         }
 
+        protected override ShaderUtils.ShaderID shaderID => ShaderUtils.ShaderID.SG_SpriteUnlit;
+
         public override bool IsActive() => true;
 
         public override void Setup(ref TargetSetupContext context)
         {
+            base.Setup(ref context);
             context.AddAssetDependency(kSourceCodeGuid, AssetCollection.Flags.SourceDependency);
-            context.AddSubShader(SubShaders.SpriteUnlit(target));
+            context.AddSubShader(PostProcessSubShader(SubShaders.SpriteUnlit(target)));
         }
 
         public override void GetFields(ref TargetFieldContext context)
         {
-            var descs = context.blocks.Select(x => x.descriptor);
-            // Only support SpriteColor legacy block if BaseColor/Alpha are not active
-            bool useLegacyBlocks = !descs.Contains(BlockFields.SurfaceDescription.BaseColor) && !descs.Contains(BlockFields.SurfaceDescription.Alpha);
-            context.AddField(CoreFields.UseLegacySpriteBlocks, useLegacyBlocks);
+            base.GetFields(ref context);
 
-            // Surface Type
-            context.AddField(UniversalFields.SurfaceTransparent);
-            context.AddField(Fields.DoubleSided);
-
-            // Blend Mode
-            switch (target.alphaMode)
-            {
-                case AlphaMode.Premultiply:
-                    context.AddField(UniversalFields.BlendPremultiply);
-                    break;
-                case AlphaMode.Additive:
-                    context.AddField(UniversalFields.BlendAdd);
-                    break;
-                case AlphaMode.Multiply:
-                    context.AddField(UniversalFields.BlendMultiply);
-                    break;
-                default:
-                    context.AddField(Fields.BlendAlpha);
-                    break;
-            }
+            SpriteSubTargetUtility.AddDefaultFields(ref context, target);
         }
 
         public override void GetActiveBlocks(ref TargetActiveBlockContext context)
         {
-            // Only support SpriteColor legacy block if BaseColor/Alpha are not active
-            bool useLegacyBlocks = !context.currentBlocks.Contains(BlockFields.SurfaceDescription.BaseColor) && !context.currentBlocks.Contains(BlockFields.SurfaceDescription.Alpha);
-            context.AddBlock(BlockFields.SurfaceDescriptionLegacy.SpriteColor, useLegacyBlocks);
-
-            context.AddBlock(BlockFields.SurfaceDescription.Alpha);
+            SpriteSubTargetUtility.GetDefaultActiveBlocks(ref context, target);
         }
 
         public override void GetPropertiesGUI(ref TargetPropertyGUIContext context, Action onChange, Action<String> registerUndo)
         {
-            context.AddProperty("Blending Mode", new EnumField(AlphaMode.Alpha) { value = target.alphaMode }, (evt) =>
-            {
-                if (Equals(target.alphaMode, evt.newValue))
-                    return;
-
-                registerUndo("Change Blend");
-                target.alphaMode = (AlphaMode)evt.newValue;
-                onChange();
-            });
+            SpriteSubTargetUtility.AddDefaultPropertiesGUI(ref context, onChange, registerUndo, target);
         }
 
         public bool TryUpgradeFromMasterNode(IMasterNode1 masterNode, out Dictionary<BlockFieldDescriptor, int> blockMap)
@@ -88,6 +58,7 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 { BlockFields.VertexDescription.Normal, 10 },
                 { BlockFields.VertexDescription.Tangent, 11 },
                 { BlockFields.SurfaceDescriptionLegacy.SpriteColor, 0 },
+                { BlockFields.SurfaceDescription.AlphaClipThreshold, 8 },
             };
 
             return true;
@@ -107,7 +78,7 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                     generatesPreview = true,
                     passes = new PassCollection
                     {
-                        { SpriteUnlitPasses.Unlit },
+                        { SpriteUnlitPasses.Unlit(target) },
                         // Currently neither of these passes (selection/picking) can be last for the game view for
                         // UI shaders to render correctly. Verify [1352225] before changing this order.
                         { CorePasses._2DSceneSelection(target) },
@@ -123,36 +94,45 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
         #region Passes
         static class SpriteUnlitPasses
         {
-            public static PassDescriptor Unlit = new PassDescriptor
+            public static PassDescriptor Unlit(UniversalTarget target)
             {
-                // Definition
-                displayName = "Sprite Unlit",
-                referenceName = "SHADERPASS_SPRITEUNLIT",
-                lightMode = "Universal2D",
-                useInPreview = true,
+                var result = new PassDescriptor()
+                {
 
-                // Template
-                passTemplatePath = GenerationUtils.GetDefaultTemplatePath("PassMesh.template"),
-                sharedTemplateDirectories = GenerationUtils.GetDefaultSharedTemplateDirectories(),
+                    // Definition
+                    displayName = "Sprite Unlit",
+                    referenceName = "SHADERPASS_SPRITEUNLIT",
+                    lightMode = "Universal2D",
+                    useInPreview = true,
 
-                // Port Mask
-                validVertexBlocks = CoreBlockMasks.Vertex,
-                validPixelBlocks = SpriteUnlitBlockMasks.Fragment,
+                    // Template
+                    passTemplatePath = UniversalTarget.kUberTemplatePath,
+                    sharedTemplateDirectories = UniversalTarget.kSharedTemplateDirectories,
 
-                // Fields
-                structs = CoreStructCollections.Default,
-                requiredFields = SpriteUnlitRequiredFields.Unlit,
-                fieldDependencies = CoreFieldDependencies.Default,
+                    // Port Mask
+                    validVertexBlocks = CoreBlockMasks.Vertex,
+                    validPixelBlocks = SpriteUnlitBlockMasks.Fragment,
 
-                // Conditional State
-                renderStates = CoreRenderStates.Default,
-                pragmas = CorePragmas._2DDefault,
-                keywords = SpriteUnlitKeywords.Unlit,
-                includes = SpriteUnlitIncludes.Unlit,
+                    // Fields
+                    structs = CoreStructCollections.Default,
+                    requiredFields = SpriteUnlitRequiredFields.Unlit,
+                    fieldDependencies = CoreFieldDependencies.Default,
 
-                // Custom Interpolator Support
-                customInterpolators = CoreCustomInterpDescriptors.Common
-            };
+                    // Conditional State
+                    renderStates = CoreRenderStates.Default,
+                    pragmas = CorePragmas._2DDefault,
+                    defines = new DefineCollection(),
+                    keywords = SpriteUnlitKeywords.Unlit,
+                    includes = SpriteUnlitIncludes.Unlit,
+
+                    // Custom Interpolator Support
+                    customInterpolators = CoreCustomInterpDescriptors.Common
+                };
+
+                SpriteSubTargetUtility.AddAlphaClipControlToPass(ref result, target);
+
+                return result;
+            }
 
             public static PassDescriptor Forward = new PassDescriptor
             {
@@ -163,8 +143,8 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 useInPreview = true,
 
                 // Template
-                passTemplatePath = GenerationUtils.GetDefaultTemplatePath("PassMesh.template"),
-                sharedTemplateDirectories = GenerationUtils.GetDefaultSharedTemplateDirectories(),
+                passTemplatePath = UniversalTarget.kUberTemplatePath,
+                sharedTemplateDirectories = UniversalTarget.kSharedTemplateDirectories,
 
                 // Port Mask
                 validVertexBlocks = CoreBlockMasks.Vertex,
@@ -195,6 +175,7 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 BlockFields.SurfaceDescription.BaseColor,
                 BlockFields.SurfaceDescriptionLegacy.SpriteColor,
                 BlockFields.SurfaceDescription.Alpha,
+                BlockFields.SurfaceDescription.AlphaClipThreshold,
             };
         }
         #endregion

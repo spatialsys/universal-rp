@@ -35,6 +35,13 @@ namespace UnityEditor.Rendering.Universal
 #if ENABLE_VR && ENABLE_XR_MODULE
         public SerializedProperty allowXRRendering { get; }
 #endif
+        public SerializedProperty taaQuality { get; }
+        public SerializedProperty taaFrameInfluence { get; }
+        public SerializedProperty taaJitterScale { get; }
+        public SerializedProperty taaMipBias { get; }
+        public SerializedProperty taaVarianceClampScale { get; }
+        public SerializedProperty taaContrastAdaptiveSharpening { get; }
+        public SerializedProperty allowHDROutput { get; }
 
         public (Camera camera, UniversalRenderPipelineSerializedCamera serializedCamera) this[int index]
         {
@@ -97,6 +104,16 @@ namespace UnityEditor.Rendering.Universal
 #if ENABLE_VR && ENABLE_XR_MODULE
             allowXRRendering = serializedAdditionalDataObject.FindProperty("m_AllowXRRendering");
 #endif
+
+            var taaSettings = serializedAdditionalDataObject.FindProperty(nameof(UniversalAdditionalCameraData.m_TaaSettings));
+            taaQuality = taaSettings.FindPropertyRelative(nameof(TemporalAA.Settings.quality));
+            taaFrameInfluence = taaSettings.FindPropertyRelative(nameof(TemporalAA.Settings.frameInfluence));
+            taaJitterScale = taaSettings.FindPropertyRelative(nameof(TemporalAA.Settings.jitterScale));
+            taaMipBias = taaSettings.FindPropertyRelative(nameof(TemporalAA.Settings.mipBias));
+            taaVarianceClampScale = taaSettings.FindPropertyRelative(nameof(TemporalAA.Settings.varianceClampScale));
+            taaContrastAdaptiveSharpening = taaSettings.FindPropertyRelative(nameof(TemporalAA.Settings.contrastAdaptiveSharpening));
+
+            allowHDROutput = serializedAdditionalDataObject.FindProperty("m_AllowHDROutput");
         }
 
         /// <summary>
@@ -104,14 +121,20 @@ namespace UnityEditor.Rendering.Universal
         /// </summary>
         public void Update()
         {
+            UpdateInternal();
+
+            if (cameraSerializedObjects == null || cameraSerializedObjects.Length != numCameras)
+                Refresh();
+
+            for (int i = 0; i < numCameras; ++i)
+                cameraSerializedObjects[i]?.UpdateInternal();
+        }
+
+        private void UpdateInternal()
+        {
             baseCameraSettings.Update();
             serializedObject.Update();
             serializedAdditionalDataObject.Update();
-
-            for (int i = 0; i < numCameras; ++i)
-            {
-                cameraSerializedObjects[i].Update();
-            }
         }
 
         /// <summary>
@@ -119,14 +142,20 @@ namespace UnityEditor.Rendering.Universal
         /// </summary>
         public void Apply()
         {
+            ApplyInternal();
+
+            if (cameraSerializedObjects == null || cameraSerializedObjects.Length != numCameras)
+                Refresh();
+
+            for (int i = 0; i < numCameras; ++i)
+                cameraSerializedObjects[i]?.ApplyInternal();
+        }
+
+        private void ApplyInternal()
+        {
             baseCameraSettings.ApplyModifiedProperties();
             serializedObject.ApplyModifiedProperties();
             serializedAdditionalDataObject.ApplyModifiedProperties();
-
-            for (int i = 0; i < numCameras; ++i)
-            {
-                cameraSerializedObjects[i].Apply();
-            }
         }
 
         /// <summary>
@@ -141,7 +170,8 @@ namespace UnityEditor.Rendering.Universal
             for (int i = 0; i < numCameras; ++i)
             {
                 Camera cam = cameras.GetArrayElementAtIndex(i).objectReferenceValue as Camera;
-                cameraSerializedObjects[i] = new UniversalRenderPipelineSerializedCamera(new SerializedObject(cam));
+                if (cam != null)
+                    cameraSerializedObjects[i] = new UniversalRenderPipelineSerializedCamera(new SerializedObject(cam));
             }
         }
     }

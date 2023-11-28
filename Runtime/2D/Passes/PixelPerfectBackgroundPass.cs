@@ -14,7 +14,7 @@ namespace UnityEngine.Rendering.Universal
 
         public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
         {
-            var cmd = CommandBufferPool.Get();
+            var cmd = renderingData.commandBuffer;
 
             using (new ProfilingScope(cmd, m_ProfilingScope))
             {
@@ -26,10 +26,6 @@ namespace UnityEngine.Rendering.Universal
                     ClearFlag.Color,
                     Color.black);
             }
-
-
-            context.ExecuteCommandBuffer(cmd);
-            CommandBufferPool.Release(cmd);
         }
     }
 }

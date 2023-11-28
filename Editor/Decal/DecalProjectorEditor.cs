@@ -55,6 +55,7 @@ namespace UnityEditor.Rendering.Universal
         SerializedProperty m_Offset;
         SerializedProperty[] m_OffsetValues;
         SerializedProperty m_FadeFactor;
+        SerializedProperty m_RenderingLayerMask;
 
         int layerMask => (target as Component).gameObject.layer;
         bool layerMaskHasMultipleValues
@@ -181,6 +182,7 @@ namespace UnityEditor.Rendering.Universal
                 m_Offset.FindPropertyRelative("z"),
             };
             m_FadeFactor = serializedObject.FindProperty("m_FadeFactor");
+            m_RenderingLayerMask = serializedObject.FindProperty("m_DecalLayerMask");
 
             ReinitSavedRatioSizePivotPosition();
         }
@@ -505,7 +507,15 @@ namespace UnityEditor.Rendering.Universal
 
             // update each target
             foreach (DecalProjector decalProjector in targets)
+            {
                 UpdateSizeOfOneTarget(decalProjector);
+
+                // Fix for UUM-29105 (Changes made to Decal Project Prefab in the Inspector are not saved)
+                // This editor doesn't use serializedObject to modify the target objects, explicitly mark the prefab
+                // asset dirty to ensure the new data is saved.
+                if (PrefabUtility.IsPartOfPrefabAsset(decalProjector))
+                    EditorUtility.SetDirty(decalProjector);
+            }
 
             // update again serialize object to register change in targets
             serializedObject.Update();
@@ -528,9 +538,7 @@ namespace UnityEditor.Rendering.Universal
 
             bool isDecalSupported = DecalProjector.isSupported;
             if (!isDecalSupported)
-            {
-                EditorGUILayout.HelpBox("No renderer has a Decal Renderer Feature added.", MessageType.Warning);
-            }
+                EditorUtils.FeatureHelpBox("The current renderer has no Decal Renderer Feature added.", MessageType.Warning);
 
             EditorGUI.BeginChangeCheck();
             {
@@ -606,6 +614,8 @@ namespace UnityEditor.Rendering.Universal
                 EditorGUI.BeginChangeCheck();
                 EditorGUILayout.PropertyField(m_MaterialProperty, k_MaterialContent);
                 materialChanged = EditorGUI.EndChangeCheck();
+
+                EditorUtils.DrawRenderingLayerMask(m_RenderingLayerMask, k_RenderingLayerMaskContent);
 
                 foreach (var target in targets)
                 {

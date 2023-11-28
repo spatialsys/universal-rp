@@ -26,11 +26,11 @@ ${VFXBegin:VFXPassForwardLitAdditionalPragma}
 #pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
 #pragma multi_compile_fragment _ _REFLECTION_PROBE_BLENDING
 #pragma multi_compile_fragment _ _REFLECTION_PROBE_BOX_PROJECTION
-#pragma multi_compile_fragment _ _SHADOWS_SOFT
+#pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
 #pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
-#pragma multi_compile_fragment _ _LIGHT_LAYERS
 #pragma multi_compile_fragment _ _LIGHT_COOKIES
-#pragma multi_compile _ _CLUSTERED_RENDERING
+#pragma multi_compile _ _LIGHT_LAYERS
+#pragma multi_compile _ _FORWARD_PLUS
 #pragma multi_compile_fog
 #pragma multi_compile _ DEBUG_DISPLAY
 ${VFXEnd}
@@ -45,8 +45,8 @@ ${VFXBegin:VFXPassGBufferAdditionalPragma}
 //See Lit.shader, these multi_compile aren't used in GBuffer
 //#pragma multi_compile _ _ADDITIONAL_LIGHTS
 //#pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
-#pragma multi_compile_fragment _ _SHADOWS_SOFT
-#pragma multi_compile_fragment _ _LIGHT_LAYERS
+#pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
+#include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/RenderingLayers.hlsl"
 ${VFXEnd}
 
 ${VFXBegin:VFXShaderGraphFunctionsInclude}
@@ -90,6 +90,9 @@ void frag(ps_input i
 #if VFX_PASSDEPTH == VFX_PASSDEPTH_ACTUAL
     #if defined(WRITE_NORMAL_BUFFER)
     , out float4 outNormalBuffer : SV_Target0
+    , out float4 outDepthColor : SV_Target1
+    #else
+    , out float4 outDepthColor : SV_Target0
     #endif
 #elif VFX_PASSDEPTH == VFX_PASSDEPTH_SELECTION || VFX_PASSDEPTH == VFX_PASSDEPTH_PICKING
     , out float4 outColor : SV_Target0
@@ -99,7 +102,7 @@ void frag(ps_input i
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
     VFXTransformPSInputs(i);
     ${VFXComputeNormalWS}
-    
+
     #ifdef VFX_SHADERGRAPH
         ${VFXAdditionalInterpolantsPreparation}
 
@@ -111,15 +114,15 @@ void frag(ps_input i
 
         float alpha = OUTSG.${SHADERGRAPH_PARAM_ALPHA};
         #else
-        
+
         float alpha = VFXGetFragmentColor(i).a;
         #if URP_USE_BASE_COLOR_MAP_ALPHA
             alpha *= VFXGetTextureColor(VFX_SAMPLER(baseColorMap),i).a;
         #endif
     #endif
-    
+
     VFXClipFragmentColor(alpha,i);
-    
+
     #if defined(WRITE_NORMAL_BUFFER)
         #ifdef VFX_SHADERGRAPH
             #if HAS_SHADERGRAPH_PARAM_NORMALTS
@@ -127,7 +130,7 @@ void frag(ps_input i
                 normalWS = mul(n,tbn);
             #endif
         #endif
-        VFXComputePixelOutputToNormalBuffer(normalWS,  outNormalBuffer);
+        VFXComputePixelOutputToNormalBuffer(i, normalWS, GetUVData(i), outNormalBuffer);
     #endif
 
     #if VFX_PASSDEPTH == VFX_PASSDEPTH_SELECTION
@@ -136,7 +139,7 @@ void frag(ps_input i
     #elif VFX_PASSDEPTH == VFX_PASSDEPTH_PICKING
         outColor = _SelectionID;
     #elif VFX_PASSDEPTH == VFX_PASSDEPTH_ACTUAL
-        //void
+        outDepthColor = float4(i.VFX_VARYING_POSCS.z, 0,0,0);
     #elif VFX_PASSDEPTH == VFX_PASSDEPTH_SHADOW
         //void
     #else

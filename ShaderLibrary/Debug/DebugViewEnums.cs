@@ -93,6 +93,10 @@ namespace UnityEngine.Rendering.Universal
         AdditionalLightsShadowMap,
         /// <summary>Display the main shadow map.</summary>
         MainLightShadowMap,
+        /// <summary>
+        /// Display the reflection probe atlas used for the Forward+ rendering path.
+        /// </summary>
+        ReflectionProbeAtlas,
     }
 
     /// <summary>
@@ -111,6 +115,21 @@ namespace UnityEngine.Rendering.Universal
         SolidWireframe,
         /// <summary>Render shaded geometry in addition to wireframe.</summary>
         ShadedWireframe,
+    }
+
+    /// <summary>
+    /// Debug mode of the overdraw
+    /// </summary>
+    public enum DebugOverdrawMode
+    {
+        /// <summary>No overdraw debug mode.</summary>
+        None,
+        /// <summary>Debug overdraw of opaque only.</summary>
+        Opaque,
+        /// <summary>Debug overdraw of transparent only.</summary>
+        Transparent,
+        /// <summary>Debug overdraw of everything only.</summary>
+        All
     }
 
     /// <summary>
@@ -207,6 +226,22 @@ namespace UnityEngine.Rendering.Universal
         Reflections,
         /// <summary>Display only reflections with smoothness.</summary>
         ReflectionsWithSmoothness,
+    }
+
+    /// <summary>
+    /// HDR debug mode.
+    /// </summary>
+    [GenerateHLSL]
+    public enum HDRDebugMode
+    {
+        /// <summary>No HDR debugging.</summary>
+        None,
+        /// <summary>Gamut view: show the gamuts and what part of the gamut the image shows.</summary>
+        GamutView,
+        /// <summary>Gamut clip: show what part of the Scene is covered by the Rec709 gamut and which parts are in the Rec2020 gamut.</summary>
+        GamutClip,
+        /// <summary>If the luminance value exceeds the paper white value, show the exceeding value in colors between yellow and red. Shows luminance values otherwise.</summary>
+        ValuesAbovePaperWhite
     }
 
     /// <summary>

@@ -3,16 +3,17 @@ using System.Linq;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor.ShaderGraph;
-using UnityEngine.Rendering;
+using Unity.Rendering.Universal;
 using UnityEditor.UIElements;
 using UnityEngine.UIElements;
 using UnityEditor.ShaderGraph.Legacy;
 using UnityEngine.Rendering.Universal;
 using UnityEditor.ShaderGraph.Internal;
+using ShaderUtils = Unity.Rendering.Universal.ShaderUtils;
 
 namespace UnityEditor.Rendering.Universal.ShaderGraph
 {
-    sealed class UniversalDecalSubTarget : SubTarget<UniversalTarget>
+    sealed class UniversalDecalSubTarget : UniversalSubTarget
     {
         static readonly GUID kSourceCodeGuid = new GUID("f6cdcb0f9c306bf4895b74013d29ed47"); // UniversalDecalSubTarget.cs
 
@@ -74,13 +75,16 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
 
         public override bool IsActive() => true;
 
+        protected override ShaderUtils.ShaderID shaderID => ShaderUtils.ShaderID.SG_Decal;
+
         public override void Setup(ref TargetSetupContext context)
         {
+            base.Setup(ref context);
             context.AddAssetDependency(kSourceCodeGuid, AssetCollection.Flags.SourceDependency);
             context.AddCustomEditorForRenderPipeline("UnityEditor.Rendering.Universal.DecalShaderGraphGUI", typeof(UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset)); // TODO: This should be owned by URP
 
             {
-                SubShaderDescriptor subShader = SubShaders.Decal;
+                SubShaderDescriptor subShader = SubShaders.Decal(decalData.supportLodCrossFade ? $"{UnityEditor.ShaderGraph.DisableBatching.LODFading}" : $"{UnityEditor.ShaderGraph.DisableBatching.False}");
 
                 var passes = new PassCollection();
                 foreach (var pass in subShader.passes)
@@ -305,52 +309,59 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
         #region SubShader
         static class SubShaders
         {
-            // Relies on the order shader passes are declared in DecalSystem.cs
-            public static SubShaderDescriptor Decal = new SubShaderDescriptor()
+            public static SubShaderDescriptor Decal(string disableBatchingTag)
             {
-                pipelineTag = UniversalTarget.kPipelineTag,
-                customTags = "\"PreviewType\"=\"Plane\"",
-                generatesPreview = true,
-                passes = new PassCollection
+                return new SubShaderDescriptor()
                 {
-                    { DecalPasses.DBufferProjector, new FieldCondition(AffectsDBuffer, true) },
-                    { DecalPasses.ForwardEmissiveProjector, new FieldCondition(AffectsEmission, true) },
-                    { DecalPasses.ScreenSpaceProjector, new FieldCondition(DecalDefault, true) },
-                    { DecalPasses.GBufferProjector, new FieldCondition(DecalDefault, true) },
-                    { DecalPasses.DBufferMesh, new FieldCondition(AffectsDBuffer, true) },
-                    { DecalPasses.ForwardEmissiveMesh, new FieldCondition(AffectsEmission, true) },
-                    { DecalPasses.ScreenSpaceMesh, new FieldCondition(DecalDefault, true) },
-                    { DecalPasses.GBufferMesh, new FieldCondition(DecalDefault, true) },
-                    { DecalPasses.ScenePicking, new FieldCondition(DecalDefault, true) },
-                },
-            };
+                    pipelineTag = UniversalTarget.kPipelineTag,
+                    customTags = "\"PreviewType\"=\"Plane\"",
+                    disableBatchingTag = disableBatchingTag,
+                    generatesPreview = true,
+                    passes = new PassCollection
+                    {
+                        { DecalPasses.DBufferProjector, new FieldCondition(AffectsDBuffer, true) },
+                        { DecalPasses.ForwardEmissiveProjector, new FieldCondition(AffectsEmission, true) },
+                        { DecalPasses.ScreenSpaceProjector, new FieldCondition(DecalDefault, true) },
+                        { DecalPasses.GBufferProjector, new FieldCondition(DecalDefault, true) },
+                        { DecalPasses.DBufferMesh, new FieldCondition(AffectsDBuffer, true) },
+                        { DecalPasses.ForwardEmissiveMesh, new FieldCondition(AffectsEmission, true) },
+                        { DecalPasses.ScreenSpaceMesh, new FieldCondition(DecalDefault, true) },
+                        { DecalPasses.GBufferMesh, new FieldCondition(DecalDefault, true) },
+                        { DecalPasses.ScenePicking, new FieldCondition(DecalDefault, true) },
+                    },
+                };
+            }
         }
         #endregion
 
         #region Passes
         static class DecalPasses
         {
-            public static PassDescriptor ScenePicking = new PassDescriptor()
+            public static PassDescriptor ScenePicking = GetScenePicking(DecalPragmas.Instanced);
+            public static PassDescriptor GetScenePicking(PragmaCollection pragma)
             {
-                // Definition
-                displayName = "ScenePickingPass",
-                referenceName = "SHADERPASS_DEPTHONLY",
-                lightMode = "Picking",
-                useInPreview = false,
+                return new PassDescriptor
+                {
+                    // Definition
+                    displayName = "ScenePickingPass",
+                    referenceName = "SHADERPASS_DEPTHONLY",
+                    lightMode = "Picking",
+                    useInPreview = false,
 
-                // Template
-                passTemplatePath = "Packages/com.unity.render-pipelines.universal/Editor/Decal/DecalPass.template",
-                sharedTemplateDirectories = GenerationUtils.GetDefaultSharedTemplateDirectories(),
+                    // Template
+                    passTemplatePath = "Packages/com.unity.render-pipelines.universal/Editor/Decal/DecalPass.template",
+                    sharedTemplateDirectories = GenerationUtils.GetDefaultSharedTemplateDirectories(),
 
-                // Collections
-                renderStates = DecalRenderStates.ScenePicking,
-                pragmas = DecalPragmas.MultipleRenderTargets,
-                defines = DecalDefines.ScenePicking,
-                includes = DecalIncludes.ScenePicking,
+                    // Collections
+                    renderStates = DecalRenderStates.ScenePicking,
+                    pragmas = pragma,
+                    defines = DecalDefines.ScenePicking,
+                    includes = DecalIncludes.ScenePicking,
 
-                structs = CoreStructCollections.Default,
-                fieldDependencies = CoreFieldDependencies.Default,
-            };
+                    structs = CoreStructCollections.Default,
+                    fieldDependencies = CoreFieldDependencies.Default,
+                };
+            }
 
             public static PassDescriptor DBufferProjector = new PassDescriptor()
             {
@@ -400,35 +411,41 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 renderStates = DecalRenderStates.ForwardEmissiveProjector,
                 pragmas = DecalPragmas.MultipleRenderTargets,
                 defines = DecalDefines.ProjectorWithEmission,
+                keywords = DecalKeywords.ForwardEmissiveProjector,
                 includes = DecalIncludes.DBuffer,
             };
 
-            public static PassDescriptor ScreenSpaceProjector = new PassDescriptor()
+            public static PassDescriptor ScreenSpaceProjector = GetScreenSpaceProjector(DecalPragmas.ScreenSpace, DecalKeywords.ScreenSpaceProjector);
+
+            public static PassDescriptor GetScreenSpaceProjector(PragmaCollection pragma, KeywordCollection keywords)
             {
-                // Definition
-                displayName = DecalShaderPassNames.DecalScreenSpaceProjector,
-                referenceName = "SHADERPASS_DECAL_SCREEN_SPACE_PROJECTOR",
-                lightMode = DecalShaderPassNames.DecalScreenSpaceProjector,
-                useInPreview = false,
+                return new PassDescriptor
+                {
+                    // Definition
+                    displayName = DecalShaderPassNames.DecalScreenSpaceProjector,
+                    referenceName = "SHADERPASS_DECAL_SCREEN_SPACE_PROJECTOR",
+                    lightMode = DecalShaderPassNames.DecalScreenSpaceProjector,
+                    useInPreview = false,
 
-                // Template
-                passTemplatePath = "Packages/com.unity.render-pipelines.universal/Editor/Decal/DecalPass.template",
-                sharedTemplateDirectories = GenerationUtils.GetDefaultSharedTemplateDirectories(),
+                    // Template
+                    passTemplatePath = "Packages/com.unity.render-pipelines.universal/Editor/Decal/DecalPass.template",
+                    sharedTemplateDirectories = GenerationUtils.GetDefaultSharedTemplateDirectories(),
 
-                // Port mask
-                validPixelBlocks = DecalBlockMasks.Fragment,
+                    // Port mask
+                    validPixelBlocks = DecalBlockMasks.Fragment,
 
-                //Fields
-                structs = CoreStructCollections.Default,
-                requiredFields = DecalRequiredFields.ScreenSpaceProjector,
-                fieldDependencies = CoreFieldDependencies.Default,
+                    //Fields
+                    structs = CoreStructCollections.Default,
+                    requiredFields = DecalRequiredFields.ScreenSpaceProjector,
+                    fieldDependencies = CoreFieldDependencies.Default,
 
-                renderStates = DecalRenderStates.ScreenSpaceProjector,
-                pragmas = DecalPragmas.ScreenSpace,
-                defines = DecalDefines.ProjectorWithEmission,
-                keywords = DecalKeywords.ScreenSpaceProjector,
-                includes = DecalIncludes.ScreenSpace,
-            };
+                    renderStates = DecalRenderStates.ScreenSpaceProjector,
+                    pragmas = pragma,
+                    defines = DecalDefines.ProjectorWithEmission,
+                    keywords = keywords,
+                    includes = DecalIncludes.ScreenSpace,
+                };
+            }
 
             public static PassDescriptor GBufferProjector = new PassDescriptor()
             {
@@ -509,35 +526,41 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 renderStates = DecalRenderStates.ForwardEmissiveMesh,
                 pragmas = DecalPragmas.MultipleRenderTargets,
                 defines = DecalDefines.MeshWithEmission,
+                keywords = DecalKeywords.ForwardEmissiveProjector,
                 includes = DecalIncludes.DBuffer,
             };
 
-            public static PassDescriptor ScreenSpaceMesh = new PassDescriptor()
+            public static PassDescriptor ScreenSpaceMesh = GetScreenSpaceMesh(DecalPragmas.ScreenSpace, DecalKeywords.ScreenSpaceMesh);
+
+            public static PassDescriptor GetScreenSpaceMesh(PragmaCollection pragma, KeywordCollection keywords)
             {
-                // Definition
-                displayName = DecalShaderPassNames.DecalScreenSpaceMesh,
-                referenceName = "SHADERPASS_DECAL_SCREEN_SPACE_MESH",
-                lightMode = DecalShaderPassNames.DecalScreenSpaceMesh,
-                useInPreview = true,
+                return new PassDescriptor
+                {
+                    // Definition
+                    displayName = DecalShaderPassNames.DecalScreenSpaceMesh,
+                    referenceName = "SHADERPASS_DECAL_SCREEN_SPACE_MESH",
+                    lightMode = DecalShaderPassNames.DecalScreenSpaceMesh,
+                    useInPreview = true,
 
-                // Template
-                passTemplatePath = "Packages/com.unity.render-pipelines.universal/Editor/Decal/DecalPass.template",
-                sharedTemplateDirectories = GenerationUtils.GetDefaultSharedTemplateDirectories(),
+                    // Template
+                    passTemplatePath = "Packages/com.unity.render-pipelines.universal/Editor/Decal/DecalPass.template",
+                    sharedTemplateDirectories = GenerationUtils.GetDefaultSharedTemplateDirectories(),
 
-                // Port mask
-                validPixelBlocks = DecalBlockMasks.Fragment, // todo
+                    // Port mask
+                    validPixelBlocks = DecalBlockMasks.Fragment, // todo
 
-                //Fields
-                structs = CoreStructCollections.Default,
-                requiredFields = DecalRequiredFields.ScreenSpaceMesh,
-                fieldDependencies = CoreFieldDependencies.Default,
+                    //Fields
+                    structs = CoreStructCollections.Default,
+                    requiredFields = DecalRequiredFields.ScreenSpaceMesh,
+                    fieldDependencies = CoreFieldDependencies.Default,
 
-                renderStates = DecalRenderStates.ScreenSpaceMesh,
-                pragmas = DecalPragmas.ScreenSpace,
-                defines = DecalDefines.MeshWithEmission,
-                keywords = DecalKeywords.ScreenSpaceMesh,
-                includes = DecalIncludes.ScreenSpace,
-            };
+                    renderStates = DecalRenderStates.ScreenSpaceMesh,
+                    pragmas = pragma,
+                    defines = DecalDefines.MeshWithEmission,
+                    keywords = keywords,
+                    includes = DecalIncludes.ScreenSpace,
+                };
+            }
 
             public static PassDescriptor GBufferMesh = new PassDescriptor()
             {
@@ -623,7 +646,6 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
             public static FieldCollection ScreenSpaceProjector = new FieldCollection()
             {
                 StructFields.Varyings.normalWS,
-                StructFields.Varyings.viewDirectionWS,
                 UniversalStructFields.Varyings.staticLightmapUV,
                 UniversalStructFields.Varyings.dynamicLightmapUV,
                 UniversalStructFields.Varyings.sh,
@@ -635,7 +657,6 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
             public static FieldCollection GBufferProjector = new FieldCollection()
             {
                 StructFields.Varyings.normalWS,
-                StructFields.Varyings.viewDirectionWS,
                 UniversalStructFields.Varyings.staticLightmapUV,
                 UniversalStructFields.Varyings.dynamicLightmapUV,
                 UniversalStructFields.Varyings.sh,
@@ -653,7 +674,6 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 StructFields.Varyings.tangentWS,
                 StructFields.Varyings.positionWS,
                 StructFields.Varyings.texCoord0,
-                StructFields.Varyings.viewDirectionWS,
                 UniversalStructFields.Varyings.staticLightmapUV,
                 UniversalStructFields.Varyings.dynamicLightmapUV,
                 UniversalStructFields.Varyings.sh,
@@ -774,7 +794,7 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
         {
             public static PragmaCollection ScreenSpace = new PragmaCollection
             {
-                { Pragma.Target(ShaderModel.Target25) }, // Derivatives
+                { Pragma.Target(ShaderModel.Target25) },
                 { Pragma.Vertex("Vert") },
                 { Pragma.Fragment("Frag") },
                 { Pragma.MultiCompileInstancing },
@@ -784,7 +804,8 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
 
             public static PragmaCollection GBuffer = new PragmaCollection
             {
-                { Pragma.Target(ShaderModel.Target35) }, // MRT4
+                { Pragma.Target(ShaderModel.Target45) }, // MRT4
+                { Pragma.ExcludeRenderers(new[] { Platform.GLES, Platform.GLES3, Platform.GLCore }) },
                 { Pragma.Vertex("Vert") },
                 { Pragma.Fragment("Frag") },
                 { Pragma.MultiCompileInstancing },
@@ -794,11 +815,20 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
 
             public static PragmaCollection MultipleRenderTargets = new PragmaCollection
             {
-                { Pragma.Target(ShaderModel.Target35) }, // MRT4
+                { Pragma.Target(ShaderModel.Target45) }, // MRT4
                 { Pragma.Vertex("Vert") },
                 { Pragma.Fragment("Frag") },
                 { Pragma.MultiCompileInstancing },
                 { Pragma.EditorSyncCompilation },
+            };
+
+            public static readonly PragmaCollection Instanced = new PragmaCollection
+            {
+                { Pragma.Target(ShaderModel.Target20) },
+                { Pragma.MultiCompileInstancing },
+                { Pragma.EditorSyncCompilation },
+                { Pragma.Vertex("Vert") },
+                { Pragma.Fragment("Frag") },
             };
         }
         #endregion
@@ -885,6 +915,7 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 { Descriptors.AffectsNormal, 1, new FieldCondition(AffectsNormal, true) },
                 { Descriptors.AffectsNormalBlend, 1, new FieldCondition(AffectsNormalBlend, true) },
                 { Descriptors.AffectsMAOS, 1, new FieldCondition(AffectsMAOS, true) },
+                { CoreKeywordDescriptors.UseUnityCrossFade, 1, new FieldCondition(Fields.LodCrossFade, true) }
             };
 
             public static DefineCollection MeshEmission = new DefineCollection
@@ -922,10 +953,10 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                     }
                 };
 
-                public static readonly KeywordDescriptor LodCrossFade = new KeywordDescriptor()
+                public static readonly KeywordDescriptor DecalLayers = new KeywordDescriptor()
                 {
-                    displayName = "LOD Cross Fade",
-                    referenceName = "LOD_FADE_CROSSFADE",
+                    displayName = "Decal Layers",
+                    referenceName = "_DECAL_LAYERS",
                     type = KeywordType.Boolean,
                     definition = KeywordDefinition.MultiCompile,
                     scope = KeywordScope.Global,
@@ -935,15 +966,23 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
             public static KeywordCollection DBufferMesh = new KeywordCollection
             {
                 { CoreKeywordDescriptors.DBuffer },
-                { Descriptors.LodCrossFade, new FieldCondition(Fields.LodCrossFade, true) },
+                { CoreKeywordDescriptors.LODFadeCrossFade, new FieldCondition(Fields.LodCrossFade, true) },
+                { Descriptors.DecalLayers },
             };
 
             public static KeywordCollection DBufferProjector = new KeywordCollection
             {
                 { CoreKeywordDescriptors.DBuffer },
+                { CoreKeywordDescriptors.FoveatedRendering },
+                { Descriptors.DecalLayers },
             };
 
-            public static readonly KeywordCollection ScreenSpaceMesh = new KeywordCollection
+            public static KeywordCollection ForwardEmissiveProjector = new KeywordCollection
+            {
+                { Descriptors.DecalLayers },
+            };
+
+            public static readonly KeywordCollection ScreenSpaceMeshGl = new KeywordCollection
             {
                 { CoreKeywordDescriptors.StaticLightmap },
                 { CoreKeywordDescriptors.DynamicLightmap },
@@ -952,11 +991,21 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 { CoreKeywordDescriptors.AdditionalLights },
                 { CoreKeywordDescriptors.AdditionalLightShadows },
                 { CoreKeywordDescriptors.ShadowsSoft },
+                { CoreKeywordDescriptors.ShadowsSoftLow },
+                { CoreKeywordDescriptors.ShadowsSoftMedium },
+                { CoreKeywordDescriptors.ShadowsSoftHigh },
                 { CoreKeywordDescriptors.LightmapShadowMixing },
                 { CoreKeywordDescriptors.ShadowsShadowmask },
-                { CoreKeywordDescriptors.ClusteredRendering },
+                { CoreKeywordDescriptors.ForwardPlus },
                 { Descriptors.DecalsNormalBlend },
-                { Descriptors.LodCrossFade, new FieldCondition(Fields.LodCrossFade, true) },
+                { CoreKeywordDescriptors.LODFadeCrossFade, new FieldCondition(Fields.LodCrossFade, true) },
+            };
+
+            public static readonly KeywordCollection ScreenSpaceMesh = new KeywordCollection
+            {
+                { ScreenSpaceMeshGl },
+                { Descriptors.DecalLayers },
+
             };
 
             public static readonly KeywordCollection ScreenSpaceProjector = new KeywordCollection
@@ -965,8 +1014,13 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 { CoreKeywordDescriptors.AdditionalLights },
                 { CoreKeywordDescriptors.AdditionalLightShadows },
                 { CoreKeywordDescriptors.ShadowsSoft },
-                { CoreKeywordDescriptors.ClusteredRendering },
+                { CoreKeywordDescriptors.ShadowsSoftLow },
+                { CoreKeywordDescriptors.ShadowsSoftMedium },
+                { CoreKeywordDescriptors.ShadowsSoftHigh },
+                { CoreKeywordDescriptors.ForwardPlus },
+                { CoreKeywordDescriptors.FoveatedRendering },
                 { Descriptors.DecalsNormalBlend },
+                { Descriptors.DecalLayers },
             };
 
             public static readonly KeywordCollection GBufferMesh = new KeywordCollection
@@ -976,19 +1030,29 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 { CoreKeywordDescriptors.DirectionalLightmapCombined },
                 { CoreKeywordDescriptors.MainLightShadows },
                 { CoreKeywordDescriptors.ShadowsSoft },
+                { CoreKeywordDescriptors.ShadowsSoftLow },
+                { CoreKeywordDescriptors.ShadowsSoftMedium },
+                { CoreKeywordDescriptors.ShadowsSoftHigh },
                 { CoreKeywordDescriptors.LightmapShadowMixing },
                 { CoreKeywordDescriptors.MixedLightingSubtractive },
                 { Descriptors.DecalsNormalBlend },
+                { Descriptors.DecalLayers },
                 { CoreKeywordDescriptors.GBufferNormalsOct },
-                { Descriptors.LodCrossFade, new FieldCondition(Fields.LodCrossFade, true) },
+                { CoreKeywordDescriptors.RenderPassEnabled },
+                { CoreKeywordDescriptors.LODFadeCrossFade, new FieldCondition(Fields.LodCrossFade, true) },
             };
 
             public static readonly KeywordCollection GBufferProjector = new KeywordCollection
             {
                 { CoreKeywordDescriptors.MainLightShadows },
                 { CoreKeywordDescriptors.ShadowsSoft },
+                { CoreKeywordDescriptors.ShadowsSoftLow },
+                { CoreKeywordDescriptors.ShadowsSoftMedium },
+                { CoreKeywordDescriptors.ShadowsSoftHigh },
                 { Descriptors.DecalsNormalBlend },
+                { Descriptors.DecalLayers },
                 { CoreKeywordDescriptors.GBufferNormalsOct },
+                { CoreKeywordDescriptors.RenderPassEnabled },
             };
         }
         #endregion
@@ -1003,6 +1067,7 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
             const string kVaryings = "Packages/com.unity.render-pipelines.universal/Editor/ShaderGraph/Includes/Varyings.hlsl";
             const string kDBuffer = "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DBuffer.hlsl";
             const string kGBuffer = "Packages/com.unity.render-pipelines.universal/ShaderLibrary/UnityGBuffer.hlsl";
+            const string kLODCrossFade = "Packages/com.unity.render-pipelines.universal/ShaderLibrary/LODCrossFade.hlsl";
 
             public static IncludeCollection DecalPregraph = new IncludeCollection
             {
@@ -1020,10 +1085,12 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
             public static IncludeCollection DBuffer = new IncludeCollection
             {
                 // Pre-graph
+                { CoreIncludes.DOTSPregraph },
                 { CoreIncludes.CorePregraph },
                 { CoreIncludes.ShaderGraphPregraph },
                 { DecalPregraph },
                 { kDBuffer, IncludeLocation.Pregraph },
+                { kLODCrossFade, IncludeLocation.Pregraph, new FieldCondition(Fields.LodCrossFade, true) },
 
                 // Post-graph
                 { DecalPostgraph },
@@ -1032,9 +1099,11 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
             public static IncludeCollection ScreenSpace = new IncludeCollection
             {
                 // Pre-graph
+                { CoreIncludes.DOTSPregraph },
                 { CoreIncludes.CorePregraph },
                 { CoreIncludes.ShaderGraphPregraph },
                 { DecalPregraph },
+                { kLODCrossFade, IncludeLocation.Pregraph, new FieldCondition(Fields.LodCrossFade, true) },
 
                 // Post-graph
                 { DecalPostgraph },
@@ -1043,10 +1112,12 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
             public static IncludeCollection GBuffer = new IncludeCollection
             {
                 // Pre-graph
+                { CoreIncludes.DOTSPregraph },
                 { CoreIncludes.CorePregraph },
                 { CoreIncludes.ShaderGraphPregraph },
                 { kGBuffer, IncludeLocation.Pregraph },
                 { DecalPregraph },
+                { kLODCrossFade, IncludeLocation.Pregraph, new FieldCondition(Fields.LodCrossFade, true) },
 
                 // Post-graph
                 { DecalPostgraph },

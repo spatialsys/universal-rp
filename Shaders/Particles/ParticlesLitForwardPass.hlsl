@@ -21,9 +21,7 @@ void InitializeInputData(VaryingsParticle input, half3 normalTS, out InputData i
 
     inputData.normalWS = NormalizeNormalPerPixel(inputData.normalWS);
 
-#if SHADER_HINT_NICE_QUALITY
     viewDirWS = SafeNormalize(viewDirWS);
-#endif
 
     inputData.viewDirectionWS = viewDirWS;
 
@@ -122,7 +120,7 @@ half4 ParticlesLitFragment(VaryingsParticle input) : SV_Target
 
     half4 color = UniversalFragmentPBR(inputData, surfaceData);
     color.rgb = MixFog(color.rgb, inputData.fogCoord);
-    color.a = OutputAlpha(color.a, _Surface);
+    color.a = OutputAlpha(color.a, IsSurfaceTypeTransparent(_Surface));
 
     return color;
 }

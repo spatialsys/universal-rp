@@ -28,7 +28,14 @@ namespace UnityEditor.Rendering.Universal
             Stack = 1 << 7,
         }
 
+        public enum ExpandableAdditional
+        {
+            /// <summary> Rendering</summary>
+            Rendering = 1 << 0,
+        }
+
         static readonly ExpandedState<Expandable, Camera> k_ExpandedState = new(Expandable.Projection, "URP");
+        static readonly AdditionalPropertiesState<ExpandableAdditional, Camera> k_ExpandedAdditionalState = new(0, "URP");
 
         public static readonly CED.IDrawer SectionProjectionSettings = CED.FoldoutGroup(
             CameraUI.Styles.projectionSettingsHeaderContent,
@@ -73,7 +80,7 @@ namespace UnityEditor.Rendering.Universal
         {
             int selectedRenderer = p.renderer.intValue;
             ScriptableRenderer scriptableRenderer = UniversalRenderPipeline.asset.GetRenderer(selectedRenderer);
-            bool isDeferred = scriptableRenderer is UniversalRenderer { renderingMode: RenderingMode.Deferred };
+            bool isDeferred = scriptableRenderer is UniversalRenderer { renderingModeRequested: RenderingMode.Deferred };
 
             EditorGUI.BeginChangeCheck();
 

@@ -2,31 +2,44 @@ Shader "Hidden/Universal Render Pipeline/Scaling Setup"
 {
     HLSLINCLUDE
         #pragma multi_compile_local_fragment _ _FXAA
-        #pragma multi_compile_vertex _ _USE_DRAW_PROCEDURAL
-        #pragma multi_compile_local_fragment _ _GAMMA_20
+        #pragma multi_compile_local_fragment _ _GAMMA_20 _GAMMA_20_AND_HDR_INPUT
+
+        #if defined(_GAMMA_20_AND_HDR_INPUT)
+        #define _GAMMA_20 1
+        #define HDR_INPUT 1
+        #endif
 
         #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
+        #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Color.hlsl"
         #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
         #include "Packages/com.unity.render-pipelines.universal/Shaders/PostProcessing/Common.hlsl"
 
-        TEXTURE2D_X(_SourceTex);
         float4 _SourceSize;
+        float4 _HDROutputLuminanceParams;
+        #define PaperWhite _HDROutputLuminanceParams.z
+        #define OneOverPaperWhite _HDROutputLuminanceParams.w
 
-        half4 Frag(Varyings input) : SV_Target
+        half4 FragScalingSetup(Varyings input) : SV_Target
         {
             UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
-            float2 uv = UnityStereoTransformScreenSpaceTex(input.uv);
+            float2 uv = UnityStereoTransformScreenSpaceTex(input.texcoord);
             float2 positionNDC = uv;
             int2   positionSS = uv * _SourceSize.xy;
 
-            half3 color = SAMPLE_TEXTURE2D_X(_SourceTex, sampler_PointClamp, uv).xyz;
+            half3 color = SAMPLE_TEXTURE2D_X(_BlitTexture, sampler_PointClamp, uv).xyz;
 
 #if _FXAA
-            color = ApplyFXAA(color, positionNDC, positionSS, _SourceSize, _SourceTex);
+            color = ApplyFXAA(color, positionNDC, positionSS, _SourceSize, _BlitTexture, PaperWhite, OneOverPaperWhite);
 #endif
 
 #if _GAMMA_20 && !UNITY_COLORSPACE_GAMMA
+            #ifdef HDR_INPUT
+            // In HDR output mode, the colors are expressed in nits, which can go up to 10k nits.
+            // We divide by the display max nits to get a max value closer to 1.0 but it could still be > 1.0.
+            // Finally, use FastTonemap() to squash everything < 1.0.
+            color = FastTonemap(color * OneOverPaperWhite);
+            #endif
             // EASU expects perceptually encoded color data so either encode to gamma 2.0 here if the input
             // data is linear, or let it pass through unchanged if it's already gamma encoded.
             color = LinearToGamma20(color);
@@ -60,8 +73,8 @@ Shader "Hidden/Universal Render Pipeline/Scaling Setup"
             Name "ScalingSetup"
 
             HLSLPROGRAM
-                #pragma vertex FullscreenVert
-                #pragma fragment Frag
+                #pragma vertex Vert
+                #pragma fragment FragScalingSetup
             ENDHLSL
         }
     }

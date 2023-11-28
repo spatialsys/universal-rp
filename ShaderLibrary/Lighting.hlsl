@@ -120,10 +120,19 @@ half3 VertexLighting(float3 positionWS, half3 normalWS)
 
 #ifdef _ADDITIONAL_LIGHTS_VERTEX
     uint lightsCount = GetAdditionalLightsCount();
+    uint meshRenderingLayers = GetMeshRenderingLayer();
+
     LIGHT_LOOP_BEGIN(lightsCount)
         Light light = GetAdditionalLight(lightIndex, positionWS);
+
+#ifdef _LIGHT_LAYERS
+    if (IsMatchingLightLayer(light.layerMask, meshRenderingLayers))
+#endif
+    {
         half3 lightColor = light.color * light.distanceAttenuation;
         vertexLightColor += LightingLambert(lightColor, light.direction, normalWS);
+    }
+
     LIGHT_LOOP_END
 #endif
 
@@ -220,17 +229,20 @@ LightingData CreateLightingData(InputData inputData, SurfaceData surfaceData)
 half3 CalculateBlinnPhong(Light light, InputData inputData, SurfaceData surfaceData)
 {
     half3 attenuatedLightColor = light.color * (light.distanceAttenuation * light.shadowAttenuation);
-    half3 lightColor = LightingLambert(attenuatedLightColor, light.direction, inputData.normalWS);
+    half3 lightDiffuseColor = LightingLambert(attenuatedLightColor, light.direction, inputData.normalWS);
 
-    lightColor *= surfaceData.albedo;
-
+    half3 lightSpecularColor = half3(0,0,0);
     #if defined(_SPECGLOSSMAP) || defined(_SPECULAR_COLOR)
     half smoothness = exp2(10 * surfaceData.smoothness + 1);
 
-    lightColor += LightingSpecular(attenuatedLightColor, light.direction, inputData.normalWS, inputData.viewDirectionWS, half4(surfaceData.specular, 1), smoothness);
+    lightSpecularColor += LightingSpecular(attenuatedLightColor, light.direction, inputData.normalWS, inputData.viewDirectionWS, half4(surfaceData.specular, 1), smoothness);
     #endif
 
-    return lightColor;
+#if _ALPHAPREMULTIPLY_ON
+    return lightDiffuseColor * surfaceData.albedo * surfaceData.alpha + lightSpecularColor;
+#else
+    return lightDiffuseColor * surfaceData.albedo + lightSpecularColor;
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -266,7 +278,7 @@ half4 UniversalFragmentPBR(InputData inputData, SurfaceData surfaceData)
     BRDFData brdfDataClearCoat = CreateClearCoatBRDFData(surfaceData, brdfData);
     half4 shadowMask = CalculateShadowMask(inputData);
     AmbientOcclusionFactor aoFactor = CreateAmbientOcclusionFactor(inputData, surfaceData);
-    uint meshRenderingLayers = GetMeshRenderingLightLayer();
+    uint meshRenderingLayers = GetMeshRenderingLayer();
     Light mainLight = GetMainLight(inputData, shadowMask, aoFactor);
 
     // NOTE: We don't apply AO to the GI here because it's done in the lighting calculation below...
@@ -276,9 +288,10 @@ half4 UniversalFragmentPBR(InputData inputData, SurfaceData surfaceData)
 
     lightingData.giColor = GlobalIllumination(brdfData, brdfDataClearCoat, surfaceData.clearCoatMask,
                                               inputData.bakedGI, aoFactor.indirectAmbientOcclusion, inputData.positionWS,
-                                              inputData.normalWS, inputData.viewDirectionWS);
-
+                                              inputData.normalWS, inputData.viewDirectionWS, inputData.normalizedScreenSpaceUV);
+#ifdef _LIGHT_LAYERS
     if (IsMatchingLightLayer(mainLight.layerMask, meshRenderingLayers))
+#endif
     {
         lightingData.mainLightColor = LightingPhysicallyBased(brdfData, brdfDataClearCoat,
                                                               mainLight,
@@ -289,12 +302,16 @@ half4 UniversalFragmentPBR(InputData inputData, SurfaceData surfaceData)
     #if defined(_ADDITIONAL_LIGHTS)
     uint pixelLightCount = GetAdditionalLightsCount();
 
-    #if USE_CLUSTERED_LIGHTING
-    for (uint lightIndex = 0; lightIndex < min(_AdditionalLightsDirectionalCount, MAX_VISIBLE_LIGHTS); lightIndex++)
+    #if USE_FORWARD_PLUS
+    for (uint lightIndex = 0; lightIndex < min(URP_FP_DIRECTIONAL_LIGHTS_COUNT, MAX_VISIBLE_LIGHTS); lightIndex++)
     {
+        FORWARD_PLUS_SUBTRACTIVE_LIGHT_CHECK
+
         Light light = GetAdditionalLight(lightIndex, inputData, shadowMask, aoFactor);
 
+#ifdef _LIGHT_LAYERS
         if (IsMatchingLightLayer(light.layerMask, meshRenderingLayers))
+#endif
         {
             lightingData.additionalLightsColor += LightingPhysicallyBased(brdfData, brdfDataClearCoat, light,
                                                                           inputData.normalWS, inputData.viewDirectionWS,
@@ -306,7 +323,9 @@ half4 UniversalFragmentPBR(InputData inputData, SurfaceData surfaceData)
     LIGHT_LOOP_BEGIN(pixelLightCount)
         Light light = GetAdditionalLight(lightIndex, inputData, shadowMask, aoFactor);
 
+#ifdef _LIGHT_LAYERS
         if (IsMatchingLightLayer(light.layerMask, meshRenderingLayers))
+#endif
         {
             lightingData.additionalLightsColor += LightingPhysicallyBased(brdfData, brdfDataClearCoat, light,
                                                                           inputData.normalWS, inputData.viewDirectionWS,
@@ -319,7 +338,12 @@ half4 UniversalFragmentPBR(InputData inputData, SurfaceData surfaceData)
     lightingData.vertexLightingColor += inputData.vertexLighting * brdfData.diffuse;
     #endif
 
+#if REAL_IS_HALF
+    // Clamp any half.inf+ to HALF_MAX
+    return min(CalculateFinalColor(lightingData, surfaceData.alpha), HALF_MAX);
+#else
     return CalculateFinalColor(lightingData, surfaceData.alpha);
+#endif
 }
 
 // Deprecated: Use the version which takes "SurfaceData" instead of passing all of these arguments...
@@ -356,7 +380,7 @@ half4 UniversalFragmentBlinnPhong(InputData inputData, SurfaceData surfaceData)
     }
     #endif
 
-    uint meshRenderingLayers = GetMeshRenderingLightLayer();
+    uint meshRenderingLayers = GetMeshRenderingLayer();
     half4 shadowMask = CalculateShadowMask(inputData);
     AmbientOcclusionFactor aoFactor = CreateAmbientOcclusionFactor(inputData, surfaceData);
     Light mainLight = GetMainLight(inputData, shadowMask, aoFactor);
@@ -366,7 +390,9 @@ half4 UniversalFragmentBlinnPhong(InputData inputData, SurfaceData surfaceData)
     inputData.bakedGI *= surfaceData.albedo;
 
     LightingData lightingData = CreateLightingData(inputData, surfaceData);
+#ifdef _LIGHT_LAYERS
     if (IsMatchingLightLayer(mainLight.layerMask, meshRenderingLayers))
+#endif
     {
         lightingData.mainLightColor += CalculateBlinnPhong(mainLight, inputData, surfaceData);
     }
@@ -374,11 +400,15 @@ half4 UniversalFragmentBlinnPhong(InputData inputData, SurfaceData surfaceData)
     #if defined(_ADDITIONAL_LIGHTS)
     uint pixelLightCount = GetAdditionalLightsCount();
 
-    #if USE_CLUSTERED_LIGHTING
-    for (uint lightIndex = 0; lightIndex < min(_AdditionalLightsDirectionalCount, MAX_VISIBLE_LIGHTS); lightIndex++)
+    #if USE_FORWARD_PLUS
+    for (uint lightIndex = 0; lightIndex < min(URP_FP_DIRECTIONAL_LIGHTS_COUNT, MAX_VISIBLE_LIGHTS); lightIndex++)
     {
+        FORWARD_PLUS_SUBTRACTIVE_LIGHT_CHECK
+
         Light light = GetAdditionalLight(lightIndex, inputData, shadowMask, aoFactor);
+#ifdef _LIGHT_LAYERS
         if (IsMatchingLightLayer(light.layerMask, meshRenderingLayers))
+#endif
         {
             lightingData.additionalLightsColor += CalculateBlinnPhong(light, inputData, surfaceData);
         }
@@ -387,7 +417,9 @@ half4 UniversalFragmentBlinnPhong(InputData inputData, SurfaceData surfaceData)
 
     LIGHT_LOOP_BEGIN(pixelLightCount)
         Light light = GetAdditionalLight(lightIndex, inputData, shadowMask, aoFactor);
+#ifdef _LIGHT_LAYERS
         if (IsMatchingLightLayer(light.layerMask, meshRenderingLayers))
+#endif
         {
             lightingData.additionalLightsColor += CalculateBlinnPhong(light, inputData, surfaceData);
         }
@@ -425,10 +457,6 @@ half4 UniversalFragmentBlinnPhong(InputData inputData, half3 diffuse, half4 spec
 ////////////////////////////////////////////////////////////////////////////////
 half4 UniversalFragmentBakedLit(InputData inputData, SurfaceData surfaceData)
 {
-    #ifdef _ALPHAPREMULTIPLY_ON
-    surfaceData.albedo *= surfaceData.alpha;
-    #endif
-
     #if defined(DEBUG_DISPLAY)
     half4 debugColor;
 

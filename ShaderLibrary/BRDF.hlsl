@@ -66,10 +66,14 @@ inline void InitializeBRDFDataDirect(half3 albedo, half3 diffuse, half3 specular
     outBRDFData.normalizationTerm   = outBRDFData.roughness * half(4.0) + half(2.0);
     outBRDFData.roughness2MinusOne  = outBRDFData.roughness2 - half(1.0);
 
-#ifdef _ALPHAPREMULTIPLY_ON
-    outBRDFData.diffuse *= alpha;
-    alpha = alpha * oneMinusReflectivity + reflectivity; // NOTE: alpha modified and propagated up.
-#endif
+    // Input is expected to be non-alpha-premultiplied while ROP is set to pre-multiplied blend.
+    // We use input color for specular, but (pre-)multiply the diffuse with alpha to complete the standard alpha blend equation.
+    // In shader: Cs' = Cs * As, in ROP: Cs' + Cd(1-As);
+    // i.e. we only alpha blend the diffuse part to background (transmittance).
+    #if defined(_ALPHAPREMULTIPLY_ON)
+        // TODO: would be clearer to multiply this once to accumulated diffuse lighting at end instead of the surface property.
+        outBRDFData.diffuse *= alpha;
+    #endif
 }
 
 // Legacy: do not call, will not correctly initialize albedo property.
@@ -103,11 +107,7 @@ inline void InitializeBRDFData(inout SurfaceData surfaceData, out BRDFData brdfD
 
 half3 ConvertF0ForClearCoat15(half3 f0)
 {
-#if defined(SHADER_API_MOBILE)
     return ConvertF0ForAirInterfaceToF0ForClearCoat15Fast(f0);
-#else
-    return ConvertF0ForAirInterfaceToF0ForClearCoat15(f0);
-#endif
 }
 
 inline void InitializeBRDFDataClearCoat(half clearCoatMask, half clearCoatSmoothness, inout BRDFData baseBRDFData, out BRDFData outBRDFData)
@@ -127,8 +127,6 @@ inline void InitializeBRDFDataClearCoat(half clearCoatMask, half clearCoatSmooth
     outBRDFData.roughness2MinusOne  = outBRDFData.roughness2 - half(1.0);
     outBRDFData.grazingTerm         = saturate(clearCoatSmoothness + kDielectricSpec.x);
 
-// Relatively small effect, cut it for lower quality
-#if !defined(SHADER_API_MOBILE)
     // Modify Roughness of base layer using coat IOR
     half ieta                        = lerp(1.0h, CLEAR_COAT_IETA, clearCoatMask);
     half coatRoughnessScale          = Sq(ieta);
@@ -141,7 +139,6 @@ inline void InitializeBRDFDataClearCoat(half clearCoatMask, half clearCoatSmooth
     baseBRDFData.roughness2         = max(baseBRDFData.roughness * baseBRDFData.roughness, HALF_MIN);
     baseBRDFData.normalizationTerm  = baseBRDFData.roughness * 4.0h + 2.0h;
     baseBRDFData.roughness2MinusOne = baseBRDFData.roughness2 - 1.0h;
-#endif
 
     // Darken/saturate base layer using coat to surface reflectance (vs. air to surface)
     baseBRDFData.specular = lerp(baseBRDFData.specular, ConvertF0ForClearCoat15(baseBRDFData.specular), clearCoatMask);
@@ -209,12 +206,16 @@ half DirectBRDFSpecular(BRDFData brdfData, half3 normalWS, half3 lightDirectionW
     // On platforms where half actually means something, the denominator has a risk of overflow
     // clamp below was added specifically to "fix" that, but dx compiler (we convert bytecode to metal/gles)
     // sees that specularTerm have only non-negative terms, so it skips max(0,..) in clamp (leaving only min(100,...))
-#if defined (SHADER_API_MOBILE) || defined (SHADER_API_SWITCH)
+#if REAL_IS_HALF
     specularTerm = specularTerm - HALF_MIN;
-    specularTerm = clamp(specularTerm, 0.0, 100.0); // Prevent FP16 overflow on mobiles
+    // Update: Conservative bump from 100.0 to 1000.0 to better match the full float specular look.
+    // Roughly 65504.0 / 32*2 == 1023.5,
+    // or HALF_MAX / ((mobile) MAX_VISIBLE_LIGHTS * 2),
+    // to reserve half of the per light range for specular and half for diffuse + indirect + emissive.
+    specularTerm = clamp(specularTerm, 0.0, 1000.0); // Prevent FP16 overflow on mobiles
 #endif
 
-return specularTerm;
+    return specularTerm;
 }
 
 // Based on Minimalist CookTorrance BRDF
