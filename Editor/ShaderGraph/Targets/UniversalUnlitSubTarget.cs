@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Assertions;
 using UnityEditor.ShaderGraph;
 using UnityEditor.ShaderGraph.Legacy;
 using static UnityEditor.Rendering.Universal.ShaderGraph.SubShaderUtils;
@@ -11,6 +12,8 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
     sealed class UniversalUnlitSubTarget : UniversalSubTarget, ILegacyTarget
     {
         static readonly GUID kSourceCodeGuid = new GUID("97c3f7dcb477ec842aa878573640313a"); // UniversalUnlitSubTarget.cs
+
+        public override int latestVersion => 2;
 
         public UniversalUnlitSubTarget()
         {
@@ -37,8 +40,7 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 context.AddCustomEditorForRenderPipeline(gui.FullName, universalRPType);
             }
             // Process SubShaders
-            context.AddSubShader(PostProcessSubShader(SubShaders.UnlitDOTS(target, target.renderType, target.renderQueue)));
-            context.AddSubShader(PostProcessSubShader(SubShaders.Unlit(target, target.renderType, target.renderQueue)));
+            context.AddSubShader(PostProcessSubShader(SubShaders.Unlit(target, target.renderType, target.renderQueue, target.disableBatching)));
         }
 
         public override void ProcessPreviewMaterial(Material material)
@@ -84,7 +86,6 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
             if (target.allowMaterialOverride)
             {
                 collector.AddFloatProperty(Property.CastShadows, target.castShadows ? 1.0f : 0.0f);
-
                 collector.AddFloatProperty(Property.SurfaceType, (float)target.surfaceType);
                 collector.AddFloatProperty(Property.BlendMode, (float)target.alphaMode);
                 collector.AddFloatProperty(Property.AlphaClip, target.alphaClip ? 1.0f : 0.0f);
@@ -94,6 +95,9 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 collector.AddFloatProperty(Property.ZWriteControl, (float)target.zWriteControl);
                 collector.AddFloatProperty(Property.ZTest, (float)target.zTestMode);    // ztest mode is designed to directly pass as ztest
                 collector.AddFloatProperty(Property.CullMode, (float)target.renderFace);    // render face enum is designed to directly pass as a cull mode
+
+                bool enableAlphaToMask = (target.alphaClip && (target.surfaceType == SurfaceType.Opaque));
+                collector.AddFloatProperty(Property.AlphaToMask, enableAlphaToMask ? 1.0f : 0.0f);
             }
 
             // We always need these properties regardless of whether the material is allowed to override other shader properties.
@@ -130,10 +134,29 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
             return true;
         }
 
+        internal override void OnAfterParentTargetDeserialized()
+        {
+            Assert.IsNotNull(target);
+
+            if (this.sgVersion < latestVersion)
+            {
+                // Upgrade old incorrect Premultiplied blend (with alpha multiply in shader) into
+                // equivalent Alpha blend mode for backwards compatibility.
+                if (this.sgVersion < 1)
+                {
+                    if (target.alphaMode == AlphaMode.Premultiply)
+                    {
+                        target.alphaMode = AlphaMode.Alpha;
+                    }
+                }
+                ChangeVersion(latestVersion);
+            }
+        }
+
         #region SubShader
         static class SubShaders
         {
-            public static SubShaderDescriptor Unlit(UniversalTarget target, string renderType, string renderQueue)
+            public static SubShaderDescriptor Unlit(UniversalTarget target, string renderType, string renderQueue, string disableBatchingTag)
             {
                 var result = new SubShaderDescriptor()
                 {
@@ -141,58 +164,28 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                     customTags = UniversalTarget.kUnlitMaterialTypeTag,
                     renderType = renderType,
                     renderQueue = renderQueue,
+                    disableBatchingTag = disableBatchingTag,
                     generatesPreview = true,
                     passes = new PassCollection()
                 };
 
-                result.passes.Add(UnlitPasses.Forward(target));
+                result.passes.Add(UnlitPasses.Forward(target, UnlitKeywords.Forward));
 
                 if (target.mayWriteDepth)
-                    result.passes.Add(CorePasses.DepthOnly(target));
+                    result.passes.Add(PassVariant(CorePasses.DepthOnly(target), CorePragmas.Instanced));
 
-                result.passes.Add(CorePasses.DepthNormalOnly(target));
+                result.passes.Add(PassVariant(UnlitPasses.DepthNormalOnly(target), CorePragmas.Instanced));
 
                 if (target.castShadows || target.allowMaterialOverride)
-                    result.passes.Add(CorePasses.ShadowCaster(target));
+                    result.passes.Add(PassVariant(CorePasses.ShadowCaster(target), CorePragmas.Instanced));
+
+                // Fill GBuffer with color and normal for custom GBuffer use cases.
+                result.passes.Add(UnlitPasses.GBuffer(target));
 
                 // Currently neither of these passes (selection/picking) can be last for the game view for
                 // UI shaders to render correctly. Verify [1352225] before changing this order.
-                result.passes.Add(CorePasses.SceneSelection(target));
-                result.passes.Add(CorePasses.ScenePicking(target));
-
-                result.passes.Add(UnlitPasses.DepthNormalOnly(target));
-
-                return result;
-            }
-
-            public static SubShaderDescriptor UnlitDOTS(UniversalTarget target, string renderType, string renderQueue)
-            {
-                var result = new SubShaderDescriptor()
-                {
-                    pipelineTag = UniversalTarget.kPipelineTag,
-                    customTags = UniversalTarget.kUnlitMaterialTypeTag,
-                    renderType = renderType,
-                    renderQueue = renderQueue,
-                    generatesPreview = true,
-                    passes = new PassCollection()
-                };
-
-                result.passes.Add(PassVariant(UnlitPasses.Forward(target), CorePragmas.DOTSForward));
-
-                if (target.mayWriteDepth)
-                    result.passes.Add(PassVariant(CorePasses.DepthOnly(target), CorePragmas.DOTSInstanced));
-
-                result.passes.Add(PassVariant(CorePasses.DepthNormalOnly(target), CorePragmas.DOTSInstanced));
-
-                if (target.castShadows || target.allowMaterialOverride)
-                    result.passes.Add(PassVariant(CorePasses.ShadowCaster(target), CorePragmas.DOTSInstanced));
-
-                // Currently neither of these passes (selection/picking) can be last for the game view for
-                // UI shaders to render correctly. Verify [1352225] before changing this order.
-                result.passes.Add(PassVariant(CorePasses.SceneSelection(target), CorePragmas.DOTSDefault));
-                result.passes.Add(PassVariant(CorePasses.ScenePicking(target), CorePragmas.DOTSDefault));
-
-                result.passes.Add(PassVariant(UnlitPasses.DepthNormalOnly(target), CorePragmas.DOTSInstanced));
+                result.passes.Add(PassVariant(CorePasses.SceneSelection(target), CorePragmas.Default));
+                result.passes.Add(PassVariant(CorePasses.ScenePicking(target), CorePragmas.Default));
 
                 return result;
             }
@@ -202,7 +195,7 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
         #region Pass
         static class UnlitPasses
         {
-            public static PassDescriptor Forward(UniversalTarget target)
+            public static PassDescriptor Forward(UniversalTarget target, KeywordCollection keywords)
             {
                 var result = new PassDescriptor
                 {
@@ -227,15 +220,17 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                     // Conditional State
                     renderStates = CoreRenderStates.UberSwitchedRenderState(target),
                     pragmas = CorePragmas.Forward,
-                    defines = new DefineCollection() { CoreDefines.UseFragmentFog },
-                    keywords = new KeywordCollection() { UnlitKeywords.UnlitBaseKeywords },
-                    includes = UnlitIncludes.Unlit,
+                    defines = new DefineCollection { CoreDefines.UseFragmentFog },
+                    keywords = new KeywordCollection { keywords },
+                    includes = new IncludeCollection { UnlitIncludes.Unlit },
 
                     // Custom Interpolator Support
                     customInterpolators = CoreCustomInterpDescriptors.Common
                 };
 
                 CorePasses.AddTargetSurfaceControlsToPass(ref result, target);
+                CorePasses.AddAlphaToMaskControlToPass(ref result, target);
+                CorePasses.AddLODCrossFadeControlToPass(ref result, target);
 
                 return result;
             }
@@ -245,10 +240,10 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 var result = new PassDescriptor
                 {
                     // Definition
-                    displayName = "DepthNormals",
+                    displayName = "DepthNormalsOnly",
                     referenceName = "SHADERPASS_DEPTHNORMALSONLY",
                     lightMode = "DepthNormalsOnly",
-                    useInPreview = false,
+                    useInPreview = true,
 
                     // Template
                     passTemplatePath = UniversalTarget.kUberTemplatePath,
@@ -267,14 +262,57 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                     renderStates = CoreRenderStates.DepthNormalsOnly(target),
                     pragmas = CorePragmas.Forward,
                     defines = new DefineCollection(),
-                    keywords = new KeywordCollection(),
-                    includes = CoreIncludes.DepthNormalsOnly,
+                    keywords = new KeywordCollection { CoreKeywordDescriptors.GBufferNormalsOct },
+                    includes = new IncludeCollection { CoreIncludes.DepthNormalsOnly },
 
                     // Custom Interpolator Support
                     customInterpolators = CoreCustomInterpDescriptors.Common
                 };
 
                 CorePasses.AddTargetSurfaceControlsToPass(ref result, target);
+                CorePasses.AddLODCrossFadeControlToPass(ref result, target);
+
+                return result;
+            }
+
+            // Deferred only in SM4.5
+            // GBuffer fill for consistency.
+            public static PassDescriptor GBuffer(UniversalTarget target)
+            {
+                var result = new PassDescriptor
+                {
+                    // Definition
+                    displayName = "GBuffer",
+                    referenceName = "SHADERPASS_GBUFFER",
+                    lightMode = "UniversalGBuffer",
+                    useInPreview = true,
+
+                    // Template
+                    passTemplatePath = UniversalTarget.kUberTemplatePath,
+                    sharedTemplateDirectories = UniversalTarget.kSharedTemplateDirectories,
+
+                    // Port Mask
+                    validVertexBlocks = CoreBlockMasks.Vertex,
+                    validPixelBlocks = CoreBlockMasks.FragmentColorAlpha,
+
+                    // Fields
+                    structs = CoreStructCollections.Default,
+                    requiredFields = UnlitRequiredFields.GBuffer,
+                    fieldDependencies = CoreFieldDependencies.Default,
+
+                    // Conditional State
+                    renderStates = CoreRenderStates.UberSwitchedRenderState(target),
+                    pragmas = CorePragmas.GBuffer,
+                    defines = new DefineCollection(),
+                    keywords = new KeywordCollection { UnlitKeywords.GBuffer },
+                    includes = new IncludeCollection { UnlitIncludes.GBuffer },
+
+                    // Custom Interpolator Support
+                    customInterpolators = CoreCustomInterpDescriptors.Common
+                };
+
+                CorePasses.AddTargetSurfaceControlsToPass(ref result, target);
+                CorePasses.AddLODCrossFadeControlToPass(ref result, target);
 
                 return result;
             }
@@ -297,13 +335,19 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 public static readonly FieldCollection Unlit = new FieldCollection()
                 {
                     StructFields.Varyings.positionWS,
-                    StructFields.Varyings.normalWS,
-                    StructFields.Varyings.viewDirectionWS,
+                    StructFields.Varyings.normalWS
                 };
 
                 public static readonly FieldCollection DepthNormalsOnly = new FieldCollection()
                 {
                     StructFields.Varyings.normalWS,
+                };
+
+                public static readonly FieldCollection GBuffer = new FieldCollection()
+                {
+                    StructFields.Varyings.positionWS,
+                    StructFields.Varyings.normalWS,
+                    UniversalStructFields.Varyings.sh   // Satisfy !LIGHTMAP_ON requirements.
                 };
             }
             #endregion
@@ -313,7 +357,7 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
         #region Keywords
         static class UnlitKeywords
         {
-            public static readonly KeywordCollection UnlitBaseKeywords = new KeywordCollection()
+            public static readonly KeywordCollection Forward = new KeywordCollection()
             {
                 // This contain lightmaps because without a proper custom lighting solution in Shadergraph,
                 // people start with the unlit then add lightmapping nodes to it.
@@ -323,6 +367,14 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 CoreKeywordDescriptors.SampleGI,
                 CoreKeywordDescriptors.DBuffer,
                 CoreKeywordDescriptors.DebugDisplay,
+                CoreKeywordDescriptors.ScreenSpaceAmbientOcclusion,
+            };
+
+            public static readonly KeywordCollection GBuffer = new KeywordCollection
+            {
+                { CoreKeywordDescriptors.DBuffer },
+                { CoreKeywordDescriptors.LODFadeCrossFade },
+                { CoreKeywordDescriptors.ScreenSpaceAmbientOcclusion },
             };
         }
         #endregion
@@ -331,10 +383,13 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
         static class UnlitIncludes
         {
             const string kUnlitPass = "Packages/com.unity.render-pipelines.universal/Editor/ShaderGraph/Includes/UnlitPass.hlsl";
+            const string kUnlitGBufferPass = "Packages/com.unity.render-pipelines.universal/Editor/ShaderGraph/Includes/UnlitGBufferPass.hlsl";
 
             public static IncludeCollection Unlit = new IncludeCollection
             {
                 // Pre-graph
+                { CoreIncludes.DOTSPregraph },
+                { CoreIncludes.WriteRenderLayersPregraph },
                 { CoreIncludes.CorePregraph },
                 { CoreIncludes.ShaderGraphPregraph },
                 { CoreIncludes.DBufferPregraph },
@@ -342,6 +397,19 @@ namespace UnityEditor.Rendering.Universal.ShaderGraph
                 // Post-graph
                 { CoreIncludes.CorePostgraph },
                 { kUnlitPass, IncludeLocation.Postgraph },
+            };
+
+            public static IncludeCollection GBuffer = new IncludeCollection
+            {
+                // Pre-graph
+                { CoreIncludes.DOTSPregraph },
+                { CoreIncludes.CorePregraph },
+                { CoreIncludes.ShaderGraphPregraph },
+                { CoreIncludes.DBufferPregraph },
+
+                // Post-graph
+                { CoreIncludes.CorePostgraph },
+                { kUnlitGBufferPass, IncludeLocation.Postgraph },
             };
         }
         #endregion

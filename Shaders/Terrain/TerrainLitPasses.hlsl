@@ -62,7 +62,6 @@ void InitializeInputData(Varyings IN, half3 normalTS, out InputData inputData)
         half3 viewDirWS = half3(IN.normal.w, IN.tangent.w, IN.bitangent.w);
         inputData.tangentToWorld = half3x3(-IN.tangent.xyz, IN.bitangent.xyz, IN.normal.xyz);
         inputData.normalWS = TransformTangentToWorld(normalTS, inputData.tangentToWorld);
-        // no need for vertex SH when _NORMALMAP is defined as we will evaluate SH per pixel
         half3 SH = 0;
     #elif defined(ENABLE_TERRAIN_PERPIXEL_NORMAL)
         half3 viewDirWS = GetWorldSpaceNormalizeViewDir(IN.positionWS);
@@ -70,7 +69,7 @@ void InitializeInputData(Varyings IN, half3 normalTS, out InputData inputData)
         half3 normalWS = TransformObjectToWorldNormal(normalize(SAMPLE_TEXTURE2D(_TerrainNormalmapTexture, sampler_TerrainNormalmapTexture, sampleCoords).rgb * 2 - 1));
         half3 tangentWS = cross(GetObjectToWorldMatrix()._13_23_33, normalWS);
         inputData.normalWS = TransformTangentToWorld(normalTS, half3x3(-tangentWS, cross(normalWS, tangentWS), normalWS));
-        half3 SH = IN.vertexSH;
+        half3 SH = 0;
     #else
         half3 viewDirWS = GetWorldSpaceNormalizeViewDir(IN.positionWS);
         inputData.normalWS = IN.normal;
@@ -321,7 +320,13 @@ void ComputeMasks(out half4 masks[4], half4 hasMask, Varyings IN)
 #ifdef TERRAIN_GBUFFER
 FragmentOutput SplatmapFragment(Varyings IN)
 #else
-half4 SplatmapFragment(Varyings IN) : SV_TARGET
+void SplatmapFragment(
+    Varyings IN
+    , out half4 outColor : SV_Target0
+#ifdef _WRITE_RENDERING_LAYERS
+    , out float4 outRenderingLayers : SV_Target1
+#endif
+    )
 #endif
 {
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(IN);
@@ -421,7 +426,12 @@ half4 SplatmapFragment(Varyings IN) : SV_TARGET
 
     SplatmapFinalColor(color, inputData.fogCoord);
 
-    return half4(color.rgb, 1.0h);
+    outColor = half4(color.rgb, 1.0h);
+
+#ifdef _WRITE_RENDERING_LAYERS
+    uint renderingLayers = GetMeshRenderingLayer();
+    outRenderingLayers = float4(EncodeMeshRenderingLayer(renderingLayers), 0, 0, 0);
+#endif
 #endif
 }
 
@@ -508,7 +518,7 @@ half4 DepthOnlyFragment(VaryingsLean IN) : SV_TARGET
     // We use depth prepass for scene selection in the editor, this code allow to output the outline correctly
     return half4(_ObjectId, _PassValue, 1.0, 1.0);
 #endif
-    return 0;
+    return IN.clipPos.z;
 }
 
 #endif

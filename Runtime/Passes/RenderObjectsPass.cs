@@ -1,10 +1,14 @@
 using System.Collections.Generic;
+using UnityEngine.Experimental.Rendering.RenderGraphModule;
 using UnityEngine.Rendering.Universal;
 using UnityEngine.Rendering;
 using UnityEngine.Scripting.APIUpdating;
 
 namespace UnityEngine.Experimental.Rendering.Universal
 {
+    /// <summary>
+    /// The scriptable render pass used with the render objects renderer feature.
+    /// </summary>
     public class RenderObjectsPass : ScriptableRenderPass
     {
         RenderQueueType renderQueueType;
@@ -13,17 +17,47 @@ namespace UnityEngine.Experimental.Rendering.Universal
         string m_ProfilerTag;
         ProfilingSampler m_ProfilingSampler;
 
+        /// <summary>
+        /// The override material to use.
+        /// </summary>
         public Material overrideMaterial { get; set; }
+
+        /// <summary>
+        /// The pass index to use with the override material.
+        /// </summary>
         public int overrideMaterialPassIndex { get; set; }
+
+        /// <summary>
+        /// The override shader to use.
+        /// </summary>
+        public Shader overrideShader { get; set; }
+
+        /// <summary>
+        /// The pass index to use with the override shader.
+        /// </summary>
+        public int overrideShaderPassIndex { get; set; }
 
         List<ShaderTagId> m_ShaderTagIdList = new List<ShaderTagId>();
 
+        /// <summary>
+        /// Sets the write and comparison function for depth.
+        /// </summary>
+        /// <param name="writeEnabled">Sets whether it should write to depth or not.</param>
+        /// <param name="function">The depth comparison function to use.</param>
         public void SetDetphState(bool writeEnabled, CompareFunction function = CompareFunction.Less)
         {
             m_RenderStateBlock.mask |= RenderStateMask.Depth;
             m_RenderStateBlock.depthState = new DepthState(writeEnabled, function);
         }
 
+        /// <summary>
+        /// Sets up the stencil settings for the pass.
+        /// </summary>
+        /// <param name="reference">The stencil reference value.</param>
+        /// <param name="compareFunction">The comparison function to use.</param>
+        /// <param name="passOp">The stencil operation to use when the stencil test passes.</param>
+        /// <param name="failOp">The stencil operation to use when the stencil test fails.</param>
+        /// <param name="zFailOp">The stencil operation to use when the stencil test fails because of depth.</param>
         public void SetStencilState(int reference, CompareFunction compareFunction, StencilOp passOp, StencilOp failOp, StencilOp zFailOp)
         {
             StencilState stencilState = StencilState.defaultValue;
@@ -40,6 +74,15 @@ namespace UnityEngine.Experimental.Rendering.Universal
 
         RenderStateBlock m_RenderStateBlock;
 
+        /// <summary>
+        /// The constructor for render objects pass.
+        /// </summary>
+        /// <param name="profilerTag">The profiler tag used with the pass.</param>
+        /// <param name="renderPassEvent">Controls when the render pass executes.</param>
+        /// <param name="shaderTags">List of shader tags to render with.</param>
+        /// <param name="renderQueueType">The queue type for the objects to render.</param>
+        /// <param name="layerMask">The layer mask to use for creating filtering settings that control what objects get rendered.</param>
+        /// <param name="cameraSettings">The settings for custom cameras values.</param>
         public RenderObjectsPass(string profilerTag, RenderPassEvent renderPassEvent, string[] shaderTags, RenderQueueType renderQueueType, int layerMask, RenderObjects.CustomCameraSettings cameraSettings)
         {
             base.profilingSampler = new ProfilingSampler(nameof(RenderObjectsPass));
@@ -50,6 +93,8 @@ namespace UnityEngine.Experimental.Rendering.Universal
             this.renderQueueType = renderQueueType;
             this.overrideMaterial = null;
             this.overrideMaterialPassIndex = 0;
+            this.overrideShader = null;
+            this.overrideShaderPassIndex = 0;
             RenderQueueRange renderQueueRange = (renderQueueType == RenderQueueType.Transparent)
                 ? RenderQueueRange.transparent
                 : RenderQueueRange.opaque;
@@ -77,6 +122,7 @@ namespace UnityEngine.Experimental.Rendering.Universal
             m_ProfilingSampler = ProfilingSampler.Get(profileId);
         }
 
+        /// <inheritdoc/>
         public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
         {
             SortingCriteria sortingCriteria = (renderQueueType == RenderQueueType.Transparent)
@@ -86,6 +132,8 @@ namespace UnityEngine.Experimental.Rendering.Universal
             DrawingSettings drawingSettings = CreateDrawingSettings(m_ShaderTagIdList, ref renderingData, sortingCriteria);
             drawingSettings.overrideMaterial = overrideMaterial;
             drawingSettings.overrideMaterialPassIndex = overrideMaterialPassIndex;
+            drawingSettings.overrideShader = overrideShader;
+            drawingSettings.overrideShaderPassIndex = overrideShaderPassIndex;
 
             ref CameraData cameraData = ref renderingData.cameraData;
             Camera camera = cameraData.camera;
@@ -94,9 +142,7 @@ namespace UnityEngine.Experimental.Rendering.Universal
             Rect pixelRect = renderingData.cameraData.pixelRect;
             float cameraAspect = (float)pixelRect.width / (float)pixelRect.height;
 
-            // NOTE: Do NOT mix ProfilingScope with named CommandBuffers i.e. CommandBufferPool.Get("name").
-            // Currently there's an issue which results in mismatched markers.
-            CommandBuffer cmd = CommandBufferPool.Get();
+            var cmd = renderingData.commandBuffer;
             using (new ProfilingScope(cmd, m_ProfilingSampler))
             {
                 if (m_CameraSettings.overrideCamera)
@@ -119,7 +165,7 @@ namespace UnityEngine.Experimental.Rendering.Universal
                     }
                 }
 
-                var activeDebugHandler = GetActiveDebugHandler(renderingData);
+                var activeDebugHandler = GetActiveDebugHandler(ref renderingData);
                 if (activeDebugHandler != null)
                 {
                     activeDebugHandler.DrawWithDebugRenderState(context, cmd, ref renderingData, ref drawingSettings, ref m_FilteringSettings, ref m_RenderStateBlock,
@@ -143,8 +189,35 @@ namespace UnityEngine.Experimental.Rendering.Universal
                     RenderingUtils.SetViewAndProjectionMatrices(cmd, cameraData.GetViewMatrix(), cameraData.GetGPUProjectionMatrix(), false);
                 }
             }
-            context.ExecuteCommandBuffer(cmd);
-            CommandBufferPool.Release(cmd);
+        }
+
+        private class PassData
+        {
+            internal RenderObjectsPass pass;
+            internal RenderingData renderingData;
+        }
+
+        internal override void RecordRenderGraph(RenderGraph renderGraph, ref RenderingData renderingData)
+        {
+            UniversalRenderer renderer = (UniversalRenderer)renderingData.cameraData.renderer;
+
+            using (var builder = renderGraph.AddRenderPass<PassData>("Render Objects Pass", out var passData, m_ProfilingSampler))
+            {
+                TextureHandle color = UniversalRenderer.m_ActiveRenderGraphColor;
+                builder.UseColorBuffer(color, 0);
+                builder.UseDepthBuffer(UniversalRenderer.m_ActiveRenderGraphDepth, DepthAccess.Write);
+                builder.ReadTexture(renderer.frameResources.mainShadowsTexture);
+
+                builder.AllowPassCulling(false);
+
+                passData.pass = this;
+                passData.renderingData = renderingData;
+
+                builder.SetRenderFunc((PassData data, RenderGraphContext rgContext) =>
+                {
+                    data.pass.Execute(rgContext.renderContext, ref data.renderingData);
+                });
+            }
         }
     }
 }

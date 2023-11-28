@@ -57,13 +57,16 @@ Pass
 
     $splice(GraphDefines)
 
-    $splice(HybridV1InjectedBuiltinProperties)
-
     // -- Properties used by ScenePickingPass
     #ifdef SCENEPICKINGPASS
     float4 _SelectionID;
     #endif
-
+    #if _RENDER_PASS_ENABLED
+    #define GBUFFER3 0
+    #define GBUFFER4 1
+    FRAMEBUFFER_INPUT_HALF(GBUFFER3);
+    FRAMEBUFFER_INPUT_HALF(GBUFFER4);
+    #endif
     // Includes
     $splice(PreGraphIncludes)
 
@@ -79,6 +82,9 @@ Pass
 
     // Graph Properties
     $splice(GraphProperties)
+
+    // Graph Includes
+    $splice(GraphIncludes)
 
     // Graph Functions
     $splice(GraphFunctions)
@@ -99,17 +105,7 @@ Pass
     // --------------------------------------------------
     // Build Surface Data
 
-    uint2 ComputeFadeMaskSeed(uint2 positionSS)
-    {
-        uint2 fadeMaskSeed;
-
-        // Can't use the view direction, it is the same across the entire screen.
-        fadeMaskSeed = positionSS;
-
-        return fadeMaskSeed;
-    }
-
-    void GetSurfaceData(Varyings input, uint2 positionSS, float angleFadeFactor, out DecalSurfaceData surfaceData)
+    void GetSurfaceData(Varyings input, float4 positionCS, float angleFadeFactor, out DecalSurfaceData surfaceData)
     {
         #if (SHADERPASS == SHADERPASS_DBUFFER_PROJECTOR) || (SHADERPASS == SHADERPASS_FORWARD_EMISSIVE_PROJECTOR) || (SHADERPASS == SHADERPASS_DECAL_SCREEN_SPACE_PROJECTOR) || (SHADERPASS == SHADERPASS_DECAL_GBUFFER_PROJECTOR)
             half4x4 normalToWorld = UNITY_ACCESS_INSTANCED_PROP(Decal, _NormalToWorld);
@@ -127,8 +123,8 @@ Pass
             $Varyings.normalWS:  input.normalWS.xyz = normalWS;
             $Varyings.tangentWS: input.tangentWS.xyzw = half4(tangentWS, sign);
         #else
-            #ifdef LOD_FADE_CROSSFADE // enable dithering LOD transition if user select CrossFade transition in LOD group
-                LODDitheringTransition(ComputeFadeMaskSeed(positionSS), unity_LODFade.x);
+            #if defined(LOD_FADE_CROSSFADE) && USE_UNITY_CROSSFADE
+                LODFadeCrossFade(positionCS);
             #endif
 
             half fadeFactor = half(1.0);
@@ -156,9 +152,9 @@ Pass
 
         #if (SHADERPASS == SHADERPASS_DBUFFER_PROJECTOR) || (SHADERPASS == SHADERPASS_DECAL_SCREEN_SPACE_PROJECTOR) || (SHADERPASS == SHADERPASS_DECAL_GBUFFER_PROJECTOR)
             #if defined(_MATERIAL_AFFECTS_NORMAL)
-                $SurfaceDescription.NormalTS:   surfaceData.normalWS.xyz = mul((half3x3)normalToWorld, surfaceDescription.NormalTS.xyz);
+                $SurfaceDescription.NormalTS:   surfaceData.normalWS.xyz = normalize(mul((half3x3)normalToWorld, surfaceDescription.NormalTS.xyz));
             #else
-                surfaceData.normalWS.xyz = normalToWorld[2].xyz;
+                surfaceData.normalWS.xyz = normalize(normalToWorld[2].xyz);
             #endif
         #elif (SHADERPASS == SHADERPASS_DBUFFER_MESH) || (SHADERPASS == SHADERPASS_DECAL_SCREEN_SPACE_MESH) || (SHADERPASS == SHADERPASS_DECAL_GBUFFER_MESH)
             #if defined(_MATERIAL_AFFECTS_NORMAL)
@@ -169,7 +165,7 @@ Pass
                 // We need to normalize as we use mikkt tangent space and this is expected (tangent space is not normalize)
                 $SurfaceDescription.NormalTS:   surfaceData.normalWS.xyz = normalize(TransformTangentToWorld(surfaceDescription.NormalTS, tangentToWorld));
             #else
-                surfaceData.normalWS.xyz = half3(input.normalWS); // Default to vertex normal
+                surfaceData.normalWS.xyz = normalize(half3(input.normalWS)); // Default to vertex normal
             #endif
         #endif
 

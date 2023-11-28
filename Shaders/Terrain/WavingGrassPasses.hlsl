@@ -45,9 +45,7 @@ void InitializeInputData(GrassVertexOutput input, out InputData inputData)
     inputData.positionWS = input.posWSShininess.xyz;
 
     half3 viewDirWS = input.viewDir;
-#if SHADER_HINT_NICE_QUALITY
     viewDirWS = SafeNormalize(viewDirWS);
-#endif
 
     inputData.normalWS = NormalizeNormalPerPixel(input.normal);
     inputData.viewDirectionWS = viewDirWS;
@@ -103,9 +101,7 @@ void InitializeVertData(GrassVertexInput input, inout GrassVertexOutput vertData
 
     vertData.viewDir = GetCameraPositionWS() - vertexInput.positionWS;
 
-#if !SHADER_QUALITY_NICE_HINT
     vertData.viewDir = SafeNormalize(vertData.viewDir);
-#endif
 
     vertData.normal = TransformObjectToWorldNormal(input.normal);
 
@@ -179,9 +175,8 @@ inline void InitializeSimpleLitSurfaceData(GrassVertexOutput input, out SurfaceD
     half4 diffuseAlpha = SampleAlbedoAlpha(input.uv, TEXTURE2D_ARGS(_MainTex, sampler_MainTex));
     half3 diffuse = diffuseAlpha.rgb * input.color.rgb;
 
-    half alpha = diffuseAlpha.a;
-    AlphaDiscard(alpha, _Cutoff);
-    alpha *= input.color.a;
+    half alpha = diffuseAlpha.a * input.color.a;
+    alpha = AlphaDiscard(alpha, _Cutoff);
 
     outSurfaceData = (SurfaceData)0;
     outSurfaceData.alpha = alpha;
@@ -217,7 +212,7 @@ half4 LitPassFragmentGrass(GrassVertexOutput input) : SV_Target
 #else
     half4 color = UniversalFragmentBlinnPhong(inputData, surfaceData);
     color.rgb = MixFog(color.rgb, inputData.fogCoord);
-    return color;
+    return half4(color.rgb, OutputAlpha(surfaceData.alpha, IsSurfaceTypeTransparent(_Surface)));
 #endif
 };
 
@@ -267,6 +262,6 @@ GrassVertexDepthOnlyOutput DepthOnlyVertex(GrassVertexDepthOnlyInput v)
 half4 DepthOnlyFragment(GrassVertexDepthOnlyOutput input) : SV_TARGET
 {
     Alpha(SampleAlbedoAlpha(input.uv, TEXTURE2D_ARGS(_MainTex, sampler_MainTex)).a, input.color, _Cutoff);
-    return 0;
+    return input.clipPos.z;
 }
 #endif

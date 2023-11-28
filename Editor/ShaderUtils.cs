@@ -8,6 +8,9 @@ using UnityEditor.Rendering.Universal.ShaderGUI;
 
 namespace Unity.Rendering.Universal
 {
+    /// <summary>
+    /// Various utility functions for shaders in URP.
+    /// </summary>
     public static class ShaderUtils
     {
         internal enum ShaderID
@@ -29,6 +32,10 @@ namespace Unity.Rendering.Universal
             // ShaderGraph IDs start at 1000, correspond to subtargets
             SG_Unlit = 1000,        // UniversalUnlitSubTarget
             SG_Lit,                 // UniversalLitSubTarget
+            SG_Decal,               // UniversalDecalSubTarget
+            SG_SpriteUnlit,         // UniversalSpriteUnlitSubTarget
+            SG_SpriteLit,           // UniversalSpriteLitSubTarget
+            SG_SpriteCustomLit      // UniversalSpriteCustomLitSubTarget
         }
 
         internal static bool IsShaderGraph(this ShaderID id)
@@ -110,11 +117,22 @@ namespace Unity.Rendering.Universal
                 case ShaderID.ParticlesUnlit:
                     ParticlesUnlitShader.SetMaterialKeywords(material, null, ParticleGUI.SetMaterialKeywords);
                     break;
+                case ShaderID.SpeedTree8:
+                    ShaderGraphLitGUI.UpdateMaterial(material, updateType);
+                    break;
                 case ShaderID.SG_Lit:
                     ShaderGraphLitGUI.UpdateMaterial(material, updateType);
                     break;
                 case ShaderID.SG_Unlit:
                     ShaderGraphUnlitGUI.UpdateMaterial(material, updateType);
+                    break;
+                case ShaderID.SG_Decal:
+                    break;
+                case ShaderID.SG_SpriteUnlit:
+                    break;
+                case ShaderID.SG_SpriteLit:
+                    break;
+                case ShaderID.SG_SpriteCustomLit:
                     break;
                 default:
                     break;

@@ -5,6 +5,9 @@ using System.Reflection;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
+#if XR_MANAGEMENT_4_0_1_OR_NEWER
+using UnityEditor.XR.Management;
+#endif
 
 namespace UnityEditor.Rendering.Universal
 {
@@ -69,11 +72,7 @@ namespace UnityEditor.Rendering.Universal
             CED.FoldoutGroup(LightUI.Styles.shadowHeader,
                 Expandable.Shadows,
                 k_ExpandedState,
-                DrawShadowsContent),
-            CED.FoldoutGroup(Styles.lightCookieHeader,
-                Expandable.LightCookie,
-                k_ExpandedState,
-                DrawLightCookieContent)
+                DrawShadowsContent)
         );
 
         static Func<int> s_SetGizmosDirty = SetGizmosDirty();
@@ -169,14 +168,14 @@ namespace UnityEditor.Rendering.Universal
                     serializedLight.Apply();
                 }
 
-                if (lightType != LightType.Rectangle && !serializedLight.settings.isCompletelyBaked && UniversalRenderPipeline.asset.supportsLightLayers && !isInPreset)
+                if (lightType != LightType.Rectangle && !serializedLight.settings.isCompletelyBaked && UniversalRenderPipeline.asset.useRenderingLayers && !isInPreset)
                 {
                     EditorGUI.BeginChangeCheck();
-                    DrawLightLayerMask(serializedLight.lightLayerMask, LightUI.Styles.lightLayer);
+                    EditorUtils.DrawRenderingLayerMask(serializedLight.renderingLayers, Styles.RenderingLayers);
                     if (EditorGUI.EndChangeCheck())
                     {
                         if (!serializedLight.customShadowLayers.boolValue)
-                            SyncLightAndShadowLayers(serializedLight, serializedLight.lightLayerMask);
+                            SyncLightAndShadowLayers(serializedLight, serializedLight.renderingLayers);
                     }
                 }
             }
@@ -196,21 +195,6 @@ namespace UnityEditor.Rendering.Universal
                 if (target.renderingLayerMask != serialized.intValue)
                     target.renderingLayerMask = serialized.intValue;
             }
-        }
-
-        internal static void DrawLightLayerMask(SerializedProperty property, GUIContent style)
-        {
-            Rect controlRect = EditorGUILayout.GetControlRect(true);
-            int lightLayer = property.intValue;
-
-            EditorGUI.BeginProperty(controlRect, style, property);
-
-            EditorGUI.BeginChangeCheck();
-            lightLayer = EditorGUI.MaskField(controlRect, style, lightLayer, UniversalRenderPipelineGlobalSettings.instance.prefixedLightLayerNames);
-            if (EditorGUI.EndChangeCheck())
-                property.intValue = lightLayer;
-
-            EditorGUI.EndProperty();
         }
 
         static void DrawSpotShapeContent(UniversalRenderPipelineSerializedLight serializedLight, Editor owner)
@@ -264,11 +248,14 @@ namespace UnityEditor.Rendering.Universal
 #endif
                 }
             }
+
+            DrawLightCookieContent(serializedLight, owner);
         }
 
         static void DrawRenderingContent(UniversalRenderPipelineSerializedLight serializedLight, Editor owner)
         {
             serializedLight.settings.DrawRenderMode();
+
             EditorGUILayout.PropertyField(serializedLight.settings.cullingMask, Styles.CullingMask);
         }
 
@@ -322,14 +309,38 @@ namespace UnityEditor.Rendering.Universal
                         EditorGUILayout.Slider(serializedLight.settings.shadowsStrength, 0f, 1f, Styles.ShadowStrength);
 
                         // Bias
-                        DrawAdditionalShadowData(serializedLight);
+                        DrawAdditionalShadowData(serializedLight, owner);
 
                         // this min bound should match the calculation in SharedLightData::GetNearPlaneMinBound()
                         float nearPlaneMinBound = Mathf.Min(0.01f * serializedLight.settings.range.floatValue, 0.1f);
                         EditorGUILayout.Slider(serializedLight.settings.shadowsNearPlane, nearPlaneMinBound, 10.0f, Styles.ShadowNearPlane);
+                        var isHololens = false;
+                        var isQuest = false;
+#if XR_MANAGEMENT_4_0_1_OR_NEWER
+                        var buildTargetGroup = BuildPipeline.GetBuildTargetGroup(EditorUserBuildSettings.activeBuildTarget);
+                        var buildTargetSettings = XRGeneralSettingsPerBuildTarget.XRGeneralSettingsForBuildTarget(buildTargetGroup);
+                        if (buildTargetSettings != null && buildTargetSettings.AssignedSettings != null && buildTargetSettings.AssignedSettings.activeLoaders.Count > 0)
+                        {
+                            isHololens = buildTargetGroup == BuildTargetGroup.WSA;
+                            isQuest = buildTargetGroup == BuildTargetGroup.Android;
+                        }
+
+#endif
+                        // Soft Shadow Quality
+                        if (serializedLight.settings.light.shadows == LightShadows.Soft)
+                            EditorGUILayout.PropertyField(serializedLight.softShadowQualityProp, Styles.SoftShadowQuality);
+
+                        if (isHololens || isQuest)
+                        {
+                            EditorGUILayout.HelpBox(
+                                "Per-light soft shadow quality level is not supported on untethered XR platforms. Use the Soft Shadow Quality setting in the URP Asset instead",
+                                MessageType.Warning
+                            );
+                        }
+
                     }
 
-                    if (UniversalRenderPipeline.asset.supportsLightLayers)
+                    if (UniversalRenderPipeline.asset.useRenderingLayers)
                     {
                         EditorGUI.BeginChangeCheck();
                         EditorGUILayout.PropertyField(serializedLight.customShadowLayers, Styles.customShadowLayers);
@@ -338,12 +349,12 @@ namespace UnityEditor.Rendering.Universal
                         {
                             if (serializedLight.customShadowLayers.boolValue)
                             {
-                                serializedLight.settings.light.renderingLayerMask = serializedLight.shadowLayerMask.intValue;
+                                serializedLight.settings.light.renderingLayerMask = serializedLight.shadowRenderingLayers.intValue;
                             }
                             else
                             {
                                 serializedLight.serializedAdditionalDataObject.ApplyModifiedProperties(); // we need to push above modification the modification on object as it is used to sync
-                                SyncLightAndShadowLayers(serializedLight, serializedLight.lightLayerMask);
+                                SyncLightAndShadowLayers(serializedLight, serializedLight.renderingLayers);
                             }
                         }
 
@@ -352,10 +363,10 @@ namespace UnityEditor.Rendering.Universal
                             using (new EditorGUI.IndentLevelScope())
                             {
                                 EditorGUI.BeginChangeCheck();
-                                DrawLightLayerMask(serializedLight.shadowLayerMask, Styles.ShadowLayer);
+                                EditorUtils.DrawRenderingLayerMask(serializedLight.shadowRenderingLayers, Styles.ShadowLayer);
                                 if (EditorGUI.EndChangeCheck())
                                 {
-                                    serializedLight.settings.light.renderingLayerMask = serializedLight.shadowLayerMask.intValue;
+                                    serializedLight.settings.light.renderingLayerMask = serializedLight.shadowRenderingLayers.intValue;
                                     serializedLight.Apply();
                                 }
                             }
@@ -368,7 +379,7 @@ namespace UnityEditor.Rendering.Universal
                 EditorGUILayout.HelpBox(Styles.BakingWarning.text, MessageType.Warning);
         }
 
-        static void DrawAdditionalShadowData(UniversalRenderPipelineSerializedLight serializedLight)
+        static void DrawAdditionalShadowData(UniversalRenderPipelineSerializedLight serializedLight, Editor editor)
         {
             // 0: Custom bias - 1: Bias values defined in Pipeline settings
             int selectedUseAdditionalData = serializedLight.additionalLightData.usePipelineSettings ? 1 : 0;
@@ -380,10 +391,12 @@ namespace UnityEditor.Rendering.Universal
                     selectedUseAdditionalData = EditorGUI.IntPopup(r, Styles.shadowBias, selectedUseAdditionalData, Styles.displayedDefaultOptions, Styles.optionDefaultValues);
                     if (checkScope.changed)
                     {
+                        Undo.RecordObjects(serializedLight.lightsAdditionalData, "Modified light additional data");
                         foreach (var additionData in serializedLight.lightsAdditionalData)
                             additionData.usePipelineSettings = selectedUseAdditionalData != 0;
 
                         serializedLight.Apply();
+                        (editor as UniversalRenderPipelineLightEditor)?.ReconstructReferenceToAdditionalDataSO();
                     }
                 }
             }

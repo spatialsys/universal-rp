@@ -7,7 +7,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
-namespace UnityEditor.Rendering.Universal.Converters
+namespace UnityEditor.Rendering.Universal
 {
     enum IdentifierType { kNullIdentifier = 0, kImportedAsset = 1, kSceneObject = 2, kSourceAsset = 3, kBuiltInAsset = 4 };
 
@@ -46,7 +46,7 @@ namespace UnityEditor.Rendering.Universal.Converters
 
         public override void OnInitialize(InitializeConverterContext ctx, Action callback)
         {
-            var context = Search.SearchService.CreateContext("asset", "urp:convert-readonly");
+            var context = Search.SearchService.CreateContext("asset", "urp=convert-readonly a=URPConverterIndex");
 
             Search.SearchService.Request(context, (c, items) =>
             {

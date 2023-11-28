@@ -25,8 +25,8 @@ namespace UnityEditor.Rendering.Universal
 
         private static class Styles
         {
-            public static GUIContent sortingLayerAll = EditorGUIUtility.TrTextContent("All");
-            public static GUIContent sortingLayerNone = EditorGUIUtility.TrTextContent("None");
+            public static GUIContent sortingLayerAll = EditorGUIUtility.TrTextContent("Everything");
+            public static GUIContent sortingLayerNone = EditorGUIUtility.TrTextContent("Nothing");
             public static GUIContent sortingLayerMixed = EditorGUIUtility.TrTextContent("Mixed...");
         }
 
@@ -67,6 +67,12 @@ namespace UnityEditor.Rendering.Universal
                     if (light != null && light.lightType == Light2D.LightType.Global)
                         Light2DManager.ErrorIfDuplicateGlobalLight(light);
                 }
+            }
+
+            if (EditorWindow.HasOpenInstances<LightBatchingDebugger>())
+            {
+                var debugger = EditorWindow.GetWindow<LightBatchingDebugger>();
+                debugger?.QueueRefresh();
             }
         }
 

@@ -62,12 +62,26 @@ namespace UnityEngine.Experimental.Rendering.Universal
             UpscaleRenderTexture
         }
 
+        /// <summary>
+        /// Defines the filter mode use to render the final render target.
+        /// </summary>
+        public enum PixelPerfectFilterMode
+        {
+            /// <summary>
+            /// Uses point filter to upscale to closest multiple of Reference Resolution, followed by bilinear filter to the target resolution.
+            /// </summary>
+            RetroAA,
+            /// <summary>
+            /// Uses point filter to upscale to target resolution.
+            /// </summary>
+            Point,
+        }
+
         private enum ComponentVersions
         {
             Version_Unserialized = 0,
             Version_1 = 1
         }
-
 
 #if UNITY_EDITOR
         const ComponentVersions k_CurrentComponentVersion = ComponentVersions.Version_1;
@@ -238,6 +252,17 @@ namespace UnityEngine.Experimental.Rendering.Universal
         }
 
         /// <summary>
+        /// Returns if an upscale pass is required.
+        /// </summary>
+        public bool requiresUpscalePass
+        {
+            get
+            {
+                return m_Internal.requiresUpscaling;
+            }
+        }
+
+        /// <summary>
         /// Round a arbitrary position to an integer pixel position. Works in world space.
         /// </summary>
         /// <param name="position"> The position you want to round.</param>
@@ -280,6 +305,7 @@ namespace UnityEngine.Experimental.Rendering.Universal
 
         [SerializeField] CropFrame m_CropFrame;
         [SerializeField] GridSnapping m_GridSnapping;
+        [SerializeField] PixelPerfectFilterMode m_FilterMode = PixelPerfectFilterMode.RetroAA;
 
         // These are obsolete. They are here only for migration.
 #if UNITY_EDITOR
@@ -298,7 +324,7 @@ namespace UnityEngine.Experimental.Rendering.Universal
         {
             get
             {
-                return m_Internal.useStretchFill ? FilterMode.Bilinear : FilterMode.Point;
+                return m_FilterMode == PixelPerfectFilterMode.RetroAA ? FilterMode.Bilinear : FilterMode.Point;
             }
         }
 
@@ -326,9 +352,14 @@ namespace UnityEngine.Experimental.Rendering.Universal
             Vector3 roundedCameraPosition = RoundToPixel(cameraPosition);
             Vector3 offset = roundedCameraPosition - cameraPosition;
             offset.z = -offset.z;
-            Matrix4x4 offsetMatrix = Matrix4x4.TRS(-offset, Quaternion.identity, new Vector3(1.0f, 1.0f, -1.0f));
 
-            m_Camera.worldToCameraMatrix = offsetMatrix * m_Camera.transform.worldToLocalMatrix;
+            // Get world to local camera matrix without scale
+            var invPos = Matrix4x4.TRS(cameraPosition + offset, Quaternion.identity, Vector3.one).inverse;
+            var invRot = Matrix4x4.Rotate(m_Camera.transform.rotation).inverse;
+            var scaleMatrix = Matrix4x4.Scale(new Vector3(1.0f, 1.0f, -1.0f));
+
+            // Calculate inverse TRS
+            m_Camera.worldToCameraMatrix = scaleMatrix * invRot * invPos;
         }
 
         void Awake()

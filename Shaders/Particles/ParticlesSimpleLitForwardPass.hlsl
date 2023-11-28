@@ -21,9 +21,7 @@ void InitializeInputData(VaryingsParticle input, half3 normalTS, out InputData i
 
     inputData.normalWS = NormalizeNormalPerPixel(inputData.normalWS);
 
-#if SHADER_HINT_NICE_QUALITY
     viewDirWS = SafeNormalize(viewDirWS);
-#endif
 
     inputData.viewDirectionWS = viewDirWS;
 
@@ -117,7 +115,7 @@ half4 ParticlesLitFragment(VaryingsParticle input) : SV_Target
     half3 diffuse = AlphaModulate(albedo.rgb, albedo.a);
     half alpha = albedo.a;
 #if defined(_EMISSION)
-    half3 emission = BlendTexture(TEXTURE2D_ARGS(_EmissionMap, sampler_EmissionMap), particleParams.uv, particleParams.blendUv) * _EmissionColor.rgb;
+    half3 emission = BlendTexture(TEXTURE2D_ARGS(_EmissionMap, sampler_EmissionMap), particleParams.uv, particleParams.blendUv).rgb * _EmissionColor.rgb;
 #else
     half3 emission = half3(0, 0, 0);
 #endif
@@ -133,7 +131,7 @@ half4 ParticlesLitFragment(VaryingsParticle input) : SV_Target
     half4 color = UniversalFragmentBlinnPhong(inputData, diffuse, specularGloss, specularGloss.a, emission, alpha, normalTS);
 
     color.rgb = MixFog(color.rgb, inputData.fogCoord);
-    color.a = OutputAlpha(color.a, _Surface);
+    color.a = OutputAlpha(color.a, IsSurfaceTypeTransparent(_Surface));
 
     return color;
 }

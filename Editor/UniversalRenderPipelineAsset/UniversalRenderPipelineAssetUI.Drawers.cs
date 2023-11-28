@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
@@ -26,6 +27,7 @@ namespace UnityEditor.Rendering.Universal
             Lighting = 1 << 2,
             PostProcessing = 1 << 3,
             Shadows = 1 << 4,
+            Quality = 1 << 5,
         }
 
         internal static void RegisterEditor(UniversalRenderPipelineAssetEditor editor)
@@ -97,15 +99,20 @@ namespace UnityEditor.Rendering.Universal
             return unsupportedGraphicsApisMessage == null;
         }
 
+        static bool ValidateCrossFadeDitheringTextures(UniversalRenderPipelineAsset pipelineAsset)
+        {
+            return pipelineAsset.textures?.bayerMatrixTex && pipelineAsset.textures?.blueNoise64LTex;
+        }
+
         static readonly ExpandedState<Expandable, UniversalRenderPipelineAsset> k_ExpandedState = new(Expandable.Rendering, "URP");
         readonly static AdditionalPropertiesState<ExpandableAdditional, Light> k_AdditionalPropertiesState = new(0, "URP");
 
         public static readonly CED.IDrawer Inspector = CED.Group(
             CED.AdditionalPropertiesFoldoutGroup(Styles.renderingSettingsText, Expandable.Rendering, k_ExpandedState, ExpandableAdditional.Rendering, k_AdditionalPropertiesState, DrawRendering, DrawRenderingAdditional),
-            CED.FoldoutGroup(Styles.qualitySettingsText, Expandable.Quality, k_ExpandedState, CED.Group(DrawQuality)),
+            CED.FoldoutGroup(Styles.qualitySettingsText, Expandable.Quality, k_ExpandedState, DrawQuality),
             CED.AdditionalPropertiesFoldoutGroup(Styles.lightingSettingsText, Expandable.Lighting, k_ExpandedState, ExpandableAdditional.Lighting, k_AdditionalPropertiesState, DrawLighting, DrawLightingAdditional),
             CED.AdditionalPropertiesFoldoutGroup(Styles.shadowSettingsText, Expandable.Shadows, k_ExpandedState, ExpandableAdditional.Shadows, k_AdditionalPropertiesState, DrawShadows, DrawShadowsAdditional),
-            CED.AdditionalPropertiesFoldoutGroup(Styles.postProcessingSettingsText, Expandable.PostProcessing, k_ExpandedState, ExpandableAdditional.PostProcessing, k_AdditionalPropertiesState, DrawPostProcessing, DrawPostProcessingAdditional)
+            CED.FoldoutGroup(Styles.postProcessingSettingsText, Expandable.PostProcessing, k_ExpandedState, DrawPostProcessing)
 #if ADAPTIVE_PERFORMANCE_2_0_0_OR_NEWER
             , CED.FoldoutGroup(Styles.adaptivePerformanceText, Expandable.AdaptivePerformance, k_ExpandedState, CED.Group(DrawAdaptivePerformance))
 #endif
@@ -139,13 +146,16 @@ namespace UnityEditor.Rendering.Universal
             EditorGUILayout.PropertyField(serialized.srpBatcher, Styles.srpBatcher);
             EditorGUILayout.PropertyField(serialized.supportsDynamicBatching, Styles.dynamicBatching);
             EditorGUILayout.PropertyField(serialized.debugLevelProp, Styles.debugLevel);
-            EditorGUILayout.PropertyField(serialized.shaderVariantLogLevel, Styles.shaderVariantLogLevel);
             EditorGUILayout.PropertyField(serialized.storeActionsOptimizationProperty, Styles.storeActionsOptimizationText);
+#if RENDER_GRAPH_ENABLED
+            EditorGUILayout.PropertyField(serialized.enableRenderGraph, Styles.enableRenderGraphText);
+#endif
         }
 
         static void DrawQuality(SerializedUniversalRenderPipelineAsset serialized, Editor ownerEditor)
         {
-            EditorGUILayout.PropertyField(serialized.hdr, Styles.hdrText);
+            DrawHDR(serialized, ownerEditor);
+
             EditorGUILayout.PropertyField(serialized.msaa, Styles.msaaText);
             serialized.renderScale.floatValue = EditorGUILayout.Slider(Styles.renderScaleText, serialized.renderScale.floatValue, UniversalRenderPipeline.minRenderScale, UniversalRenderPipeline.maxRenderScale);
             EditorGUILayout.PropertyField(serialized.upscalingFilter, Styles.upscalingFilterText);
@@ -162,6 +172,27 @@ namespace UnityEditor.Rendering.Universal
                 }
 
                 --EditorGUI.indentLevel;
+            }
+            EditorGUILayout.PropertyField(serialized.enableLODCrossFadeProp, Styles.enableLODCrossFadeText);
+            EditorGUI.BeginDisabledGroup(!serialized.enableLODCrossFadeProp.boolValue);
+            EditorGUILayout.PropertyField(serialized.lodCrossFadeDitheringTypeProp, Styles.lodCrossFadeDitheringTypeText);
+            if (!ValidateCrossFadeDitheringTextures(serialized.asset))
+                CoreEditorUtils.DrawFixMeBox("Asset doesn't hold references to dithering textures. LOD Cross Fade might not work correctly.",
+                    () => ResourceReloader.ReloadAllNullIn(serialized.asset, UniversalRenderPipelineAsset.packagePath));
+            EditorGUI.EndDisabledGroup();
+        }
+
+        static void DrawHDR(SerializedUniversalRenderPipelineAsset serialized, Editor ownerEditor)
+        {
+            EditorGUILayout.PropertyField(serialized.hdr, Styles.hdrText);
+
+            // Nested and in-between additional property
+            bool additionalProperties = k_ExpandedState[Expandable.Quality] && k_AdditionalPropertiesState[ExpandableAdditional.Quality];
+            if (serialized.hdr.boolValue && additionalProperties)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.PropertyField(serialized.hdrColorBufferPrecisionProp, Styles.hdrColorBufferPrecisionText);
+                EditorGUI.indentLevel--;
             }
         }
 
@@ -209,7 +240,7 @@ namespace UnityEditor.Rendering.Universal
             EditorGUI.EndDisabledGroup();
 
             EditorGUILayout.Space();
-            disableGroup = serialized.additionalLightsRenderingModeProp.intValue == (int)LightRenderingMode.Disabled;
+            disableGroup = serialized.additionalLightsRenderingModeProp.intValue == (int)LightRenderingMode.Disabled || !serialized.supportsLightCookies.boolValue;
 
             EditorGUI.BeginDisabledGroup(disableGroup);
             EditorGUILayout.PropertyField(serialized.additionalLightCookieResolutionProp, Styles.additionalLightsCookieResolution);
@@ -233,9 +264,11 @@ namespace UnityEditor.Rendering.Universal
         static void DrawLightingAdditional(SerializedUniversalRenderPipelineAsset serialized, Editor ownerEditor)
         {
             EditorGUILayout.PropertyField(serialized.mixedLightingSupportedProp, Styles.mixedLightingSupportLabel);
-            EditorGUILayout.PropertyField(serialized.supportsLightLayers, Styles.supportsLightLayers);
+            EditorGUILayout.PropertyField(serialized.useRenderingLayers, Styles.useRenderingLayers);
+            EditorGUILayout.PropertyField(serialized.supportsLightCookies, Styles.supportsLightCookies);
+            EditorGUILayout.PropertyField(serialized.shEvalModeProp, Styles.shEvalModeText);
 
-            if (serialized.supportsLightLayers.boolValue && !ValidateRendererGraphicsAPIsForLightLayers(serialized.asset, out var unsupportedGraphicsApisMessage))
+            if (serialized.useRenderingLayers.boolValue && !ValidateRendererGraphicsAPIsForLightLayers(serialized.asset, out var unsupportedGraphicsApisMessage))
                 EditorGUILayout.HelpBox(Styles.lightlayersUnsupportedMessage.text + unsupportedGraphicsApisMessage, MessageType.Warning, true);
         }
 
@@ -291,7 +324,25 @@ namespace UnityEditor.Rendering.Universal
                 }
             }
 
+            // Detect if we are targeting GLES2, so we can warn users about the lack of cascades on that platform
+
+            BuildTarget platform = EditorUserBuildSettings.activeBuildTarget;
+            GraphicsDeviceType[] graphicsAPIs = PlayerSettings.GetGraphicsAPIs(platform);
+
+            bool usingGLES2 = false;
+            for (int apiIndex = 0; apiIndex < graphicsAPIs.Length; apiIndex++)
+            {
+                if (graphicsAPIs[apiIndex] == GraphicsDeviceType.OpenGLES2)
+                {
+                    usingGLES2 = true;
+                    break;
+                }
+            }
+
             EditorGUILayout.IntSlider(serialized.shadowCascadeCountProp, UniversalRenderPipelineAsset.k_ShadowCascadeMinCount, UniversalRenderPipelineAsset.k_ShadowCascadeMaxCount, Styles.shadowCascadesText);
+
+            if (usingGLES2)
+                EditorGUILayout.HelpBox(Styles.shadowCascadesUnsupportedMessage.text, MessageType.Info);
 
             int cascadeCount = serialized.shadowCascadeCountProp.intValue;
             EditorGUI.indentLevel++;
@@ -309,8 +360,32 @@ namespace UnityEditor.Rendering.Universal
             serialized.shadowDepthBiasProp.floatValue = EditorGUILayout.Slider(Styles.shadowDepthBias, serialized.shadowDepthBiasProp.floatValue, 0.0f, UniversalRenderPipeline.maxShadowBias);
             serialized.shadowNormalBiasProp.floatValue = EditorGUILayout.Slider(Styles.shadowNormalBias, serialized.shadowNormalBiasProp.floatValue, 0.0f, UniversalRenderPipeline.maxShadowBias);
             EditorGUILayout.PropertyField(serialized.softShadowsSupportedProp, Styles.supportsSoftShadows);
+            if (serialized.softShadowsSupportedProp.boolValue)
+            {
+                EditorGUI.indentLevel++;
+                    DrawShadowsSoftShadowQuality(serialized, ownerEditor);
+                EditorGUI.indentLevel--;
+            }
 
             EditorGUI.indentLevel--;
+        }
+
+        static void DrawShadowsSoftShadowQuality(SerializedUniversalRenderPipelineAsset serialized, Editor ownerEditor)
+        {
+            int selectedAssetSoftShadowQuality = serialized.softShadowQualityProp.intValue;
+            Rect r = EditorGUILayout.GetControlRect(true);
+            EditorGUI.BeginProperty(r, Styles.softShadowsQuality, serialized.softShadowQualityProp);
+            {
+                using (var checkScope = new EditorGUI.ChangeCheckScope())
+                {
+                    selectedAssetSoftShadowQuality = EditorGUI.IntPopup(r, Styles.softShadowsQuality, selectedAssetSoftShadowQuality, Styles.softShadowsQualityAssetOptions, Styles.softShadowsQualityAssetValues);
+                    if (checkScope.changed)
+                    {
+                        serialized.softShadowQualityProp.intValue = Math.Clamp(selectedAssetSoftShadowQuality, (int)SoftShadowQuality.Low, (int)SoftShadowQuality.High);
+                    }
+                }
+            }
+            EditorGUI.EndProperty();
         }
 
         static void DrawShadowsAdditional(SerializedUniversalRenderPipelineAsset serialized, Editor ownerEditor)
@@ -464,12 +539,14 @@ namespace UnityEditor.Rendering.Universal
 
         static void DrawPostProcessing(SerializedUniversalRenderPipelineAsset serialized, Editor ownerEditor)
         {
-            bool isHdrOn = serialized.hdr.boolValue;
             EditorGUILayout.PropertyField(serialized.colorGradingMode, Styles.colorGradingMode);
+            bool isHdrOn = serialized.hdr.boolValue;
             if (!isHdrOn && serialized.colorGradingMode.intValue == (int)ColorGradingMode.HighDynamicRange)
                 EditorGUILayout.HelpBox(Styles.colorGradingModeWarning, MessageType.Warning);
             else if (isHdrOn && serialized.colorGradingMode.intValue == (int)ColorGradingMode.HighDynamicRange)
                 EditorGUILayout.HelpBox(Styles.colorGradingModeSpecInfo, MessageType.Info);
+            else if (isHdrOn && PlayerSettings.allowHDRDisplaySupport && serialized.colorGradingMode.intValue == (int)ColorGradingMode.LowDynamicRange)
+                EditorGUILayout.HelpBox(Styles.colorGradingModeWithHDROutput, MessageType.Warning);
 
             EditorGUILayout.DelayedIntField(serialized.colorGradingLutSize, Styles.colorGradingLutSize);
             serialized.colorGradingLutSize.intValue = Mathf.Clamp(serialized.colorGradingLutSize.intValue, UniversalRenderPipelineAsset.k_MinLutSize, UniversalRenderPipelineAsset.k_MaxLutSize);
@@ -477,10 +554,7 @@ namespace UnityEditor.Rendering.Universal
                 EditorGUILayout.HelpBox(Styles.colorGradingLutSizeWarning, MessageType.Warning);
 
             EditorGUILayout.PropertyField(serialized.useFastSRGBLinearConversion, Styles.useFastSRGBLinearConversion);
-        }
-
-        static void DrawPostProcessingAdditional(SerializedUniversalRenderPipelineAsset serialized, Editor ownerEditor)
-        {
+            EditorGUILayout.PropertyField(serialized.supportDataDrivenLensFlare, Styles.supportDataDrivenLensFlare);
             CoreEditorUtils.DrawPopup(Styles.volumeFrameworkUpdateMode, serialized.volumeFrameworkUpdateModeProp, Styles.volumeFrameworkUpdateOptions);
         }
 

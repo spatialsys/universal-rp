@@ -16,16 +16,20 @@ namespace UnityEngine.Rendering.Universal
         private List<ShaderTagId> m_ShaderTagIdList;
         private DecalDrawScreenSpaceSystem m_DrawSystem;
         private DecalScreenSpaceSettings m_Settings;
+        private bool m_DecalLayers;
 
-        public DecalScreenSpaceRenderPass(DecalScreenSpaceSettings settings, DecalDrawScreenSpaceSystem drawSystem)
+        public DecalScreenSpaceRenderPass(DecalScreenSpaceSettings settings, DecalDrawScreenSpaceSystem drawSystem, bool decalLayers)
         {
             renderPassEvent = RenderPassEvent.AfterRenderingSkybox;
-            ConfigureInput(ScriptableRenderPassInput.Depth); // Require depth
+
+            var scriptableRenderPassInput = ScriptableRenderPassInput.Depth; // Require depth
+            ConfigureInput(scriptableRenderPassInput);
 
             m_DrawSystem = drawSystem;
             m_Settings = settings;
             m_ProfilingSampler = new ProfilingSampler("Decal Screen Space Render");
             m_FilteringSettings = new FilteringSettings(RenderQueueRange.opaque, -1);
+            m_DecalLayers = decalLayers;
 
             m_ShaderTagIdList = new List<ShaderTagId>();
 
@@ -37,10 +41,10 @@ namespace UnityEngine.Rendering.Universal
 
         public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
         {
-            SortingCriteria sortingCriteria = SortingCriteria.CommonTransparent;
+            SortingCriteria sortingCriteria = SortingCriteria.None;
             DrawingSettings drawingSettings = CreateDrawingSettings(m_ShaderTagIdList, ref renderingData, sortingCriteria);
 
-            CommandBuffer cmd = CommandBufferPool.Get();
+            var cmd = renderingData.commandBuffer;
             using (new ProfilingScope(cmd, m_ProfilingSampler))
             {
                 context.ExecuteCommandBuffer(cmd);
@@ -54,6 +58,9 @@ namespace UnityEngine.Rendering.Universal
                 CoreUtils.SetKeyword(cmd, ShaderKeywordStrings.DecalNormalBlendMedium, m_Settings.normalBlend == DecalNormalBlend.Medium);
                 CoreUtils.SetKeyword(cmd, ShaderKeywordStrings.DecalNormalBlendHigh, m_Settings.normalBlend == DecalNormalBlend.High);
 
+                if (!DecalRendererFeature.isGLDevice)
+                    CoreUtils.SetKeyword(cmd, ShaderKeywordStrings.DecalLayers, m_DecalLayers);
+
                 context.ExecuteCommandBuffer(cmd);
                 cmd.Clear();
 
@@ -61,8 +68,6 @@ namespace UnityEngine.Rendering.Universal
 
                 context.DrawRenderers(renderingData.cullResults, ref drawingSettings, ref m_FilteringSettings);
             }
-            context.ExecuteCommandBuffer(cmd);
-            CommandBufferPool.Release(cmd);
         }
 
         public override void OnCameraCleanup(CommandBuffer cmd)
@@ -75,6 +80,8 @@ namespace UnityEngine.Rendering.Universal
             CoreUtils.SetKeyword(cmd, ShaderKeywordStrings.DecalNormalBlendLow, false);
             CoreUtils.SetKeyword(cmd, ShaderKeywordStrings.DecalNormalBlendMedium, false);
             CoreUtils.SetKeyword(cmd, ShaderKeywordStrings.DecalNormalBlendHigh, false);
+            CoreUtils.SetKeyword(cmd, ShaderKeywordStrings.DecalLayers, false);
+
         }
     }
 }
